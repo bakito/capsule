@@ -436,7 +436,8 @@ golint-fix: golangci-lint
 # generate mocks
 .PHONY: mocks
 mocks: mockgen
-	$(MOCKGEN) -destination internal/mocks/client/mock.go sigs.k8s.io/controller-runtime/pkg/client Client,SubResourceWriter,Reader
+	$(MOCKGEN) -destination internal/mocks/client/mock.go sigs.k8s.io/controller-runtime/pkg/client Client,Reader,SubResourceWriter
+	$(MOCKGEN) -destination internal/mocks/meta/mock.go k8s.io/apimachinery/pkg/api/meta RESTMapper
 
 .PHONY: e2e-openshift
 e2e-openshift: ginkgo
