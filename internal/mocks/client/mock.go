@@ -282,6 +282,68 @@ func (mr *MockClientMockRecorder) Update(ctx, obj any, opts ...any) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockClient)(nil).Update), varargs...)
 }
 
+// MockReader is a mock of Reader interface.
+type MockReader struct {
+	ctrl     *gomock.Controller
+	recorder *MockReaderMockRecorder
+	isgomock struct{}
+}
+
+// MockReaderMockRecorder is the mock recorder for MockReader.
+type MockReaderMockRecorder struct {
+	mock *MockReader
+}
+
+// NewMockReader creates a new mock instance.
+func NewMockReader(ctrl *gomock.Controller) *MockReader {
+	mock := &MockReader{ctrl: ctrl}
+	mock.recorder = &MockReaderMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockReader) EXPECT() *MockReaderMockRecorder {
+	return m.recorder
+}
+
+// Get mocks base method.
+func (m *MockReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, key, obj}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "Get", varargs...)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Get indicates an expected call of Get.
+func (mr *MockReaderMockRecorder) Get(ctx, key, obj any, opts ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, key, obj}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockReader)(nil).Get), varargs...)
+}
+
+// List mocks base method.
+func (m *MockReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, list}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "List", varargs...)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// List indicates an expected call of List.
+func (mr *MockReaderMockRecorder) List(ctx, list any, opts ...any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, list}, opts...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "List", reflect.TypeOf((*MockReader)(nil).List), varargs...)
+}
+
 // MockSubResourceWriter is a mock of SubResourceWriter interface.
 type MockSubResourceWriter struct {
 	ctrl     *gomock.Controller
@@ -380,66 +442,4 @@ func (mr *MockSubResourceWriterMockRecorder) Update(ctx, obj any, opts ...any) *
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx, obj}, opts...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockSubResourceWriter)(nil).Update), varargs...)
-}
-
-// MockReader is a mock of Reader interface.
-type MockReader struct {
-	ctrl     *gomock.Controller
-	recorder *MockReaderMockRecorder
-	isgomock struct{}
-}
-
-// MockReaderMockRecorder is the mock recorder for MockReader.
-type MockReaderMockRecorder struct {
-	mock *MockReader
-}
-
-// NewMockReader creates a new mock instance.
-func NewMockReader(ctrl *gomock.Controller) *MockReader {
-	mock := &MockReader{ctrl: ctrl}
-	mock.recorder = &MockReaderMockRecorder{mock}
-	return mock
-}
-
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockReader) EXPECT() *MockReaderMockRecorder {
-	return m.recorder
-}
-
-// Get mocks base method.
-func (m *MockReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	m.ctrl.T.Helper()
-	varargs := []any{ctx, key, obj}
-	for _, a := range opts {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "Get", varargs...)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Get indicates an expected call of Get.
-func (mr *MockReaderMockRecorder) Get(ctx, key, obj any, opts ...any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]any{ctx, key, obj}, opts...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockReader)(nil).Get), varargs...)
-}
-
-// List mocks base method.
-func (m *MockReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	m.ctrl.T.Helper()
-	varargs := []any{ctx, list}
-	for _, a := range opts {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "List", varargs...)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// List indicates an expected call of List.
-func (mr *MockReaderMockRecorder) List(ctx, list any, opts ...any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]any{ctx, list}, opts...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "List", reflect.TypeOf((*MockReader)(nil).List), varargs...)
 }

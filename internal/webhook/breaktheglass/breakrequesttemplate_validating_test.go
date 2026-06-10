@@ -4,161 +4,290 @@
 package breaktheglass
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"strings"
+	"testing"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/assert"
+	gm "go.uber.org/mock/gomock"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrl "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
 	mc "github.com/projectcapsule/capsule/internal/mocks/client"
+	mm "github.com/projectcapsule/capsule/internal/mocks/meta"
 	"github.com/projectcapsule/capsule/internal/webhook/test"
 	"github.com/projectcapsule/capsule/pkg/api/breaktheglass"
-	gm "go.uber.org/mock/gomock"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
-var _ = Describe("BreakRequestTemplate Webhook", func() {
-	var (
-		brt       *capsulev1beta2.BreakRequestTemplate
-		validator *breakRequestTemplateValidationHandler
-		mockCtrl  *gm.Controller
-		reader    *mc.MockReader
-		cl        *mc.MockClient
-		decoder   admission.Decoder
-	)
+func TestBreakRequestTemplateValidationHandler(t *testing.T) {
+	ctx := context.Background()
+	log := ctrl.Log.WithName("test")
 
-	BeforeEach(func() {
-		mockCtrl = gm.NewController(GinkgoT())
-		reader = mc.NewMockReader(mockCtrl)
-		cl = mc.NewMockClient(mockCtrl)
-		brt = &capsulev1beta2.BreakRequestTemplate{
+	tests := []struct {
+		name     string
+		brt      *capsulev1beta2.BreakRequestTemplate
+		setup    func(cl *mc.MockClient, restMapper *mm.MockRESTMapper)
+		expected int32
+		errMsg   string
+	}{
+		{
+			name: "deny if autoApprove is false but approvalCondition is set",
+			brt: &capsulev1beta2.BreakRequestTemplate{
+				Spec: capsulev1beta2.BreakRequestTemplateSpec{
+					AutoApprove:       false,
+					ApprovalCondition: "foo",
+					Items: breaktheglass.TemplateItems{
+						"cm": {ManifestTemplate: runtime.RawExtension{Object: &corev1.ConfigMap{}}},
+					},
+				},
+			},
+			expected: http.StatusForbidden,
+			errMsg:   "approvalCondition should not be set when autoApprove is false",
+		},
+		{
+			name: "allow if autoApprove is true and condition is empty",
+			brt: &capsulev1beta2.BreakRequestTemplate{
+				Spec: capsulev1beta2.BreakRequestTemplateSpec{
+					AutoApprove: true,
+					Items: breaktheglass.TemplateItems{
+						"cm": {ManifestTemplate: runtime.RawExtension{Object: &corev1.ConfigMap{}}},
+					},
+				},
+			},
+			setup: func(cl *mc.MockClient, restMapper *mm.MockRESTMapper) {
+				cl.EXPECT().RESTMapper().Return(restMapper).AnyTimes()
+				cl.EXPECT().Create(gm.Any(), gm.Any(), gm.Any()).DoAndReturn(func(ctx context.Context, review *authorizationv1.SelfSubjectAccessReview, _ ...client.CreateOption) error {
+					review.Status.Allowed = true
+					return nil
+				}).AnyTimes()
+			},
+			expected: 0,
+		},
+		{
+			name: "deny if approvalCondition is invalid",
+			brt: &capsulev1beta2.BreakRequestTemplate{
+				Spec: capsulev1beta2.BreakRequestTemplateSpec{
+					AutoApprove:       true,
+					ApprovalCondition: "foo.spec.reason == 'test'",
+					Items: breaktheglass.TemplateItems{
+						"cm": {ManifestTemplate: runtime.RawExtension{Object: &corev1.ConfigMap{}}},
+					},
+				},
+			},
+			expected: http.StatusForbidden,
+			errMsg:   "approvalCondition is invalid: ERROR: <input>:1:1: undeclared reference to 'foo'",
+		},
+		{
+			name: "allow if approvalCondition is valid",
+			brt: &capsulev1beta2.BreakRequestTemplate{
+				Spec: capsulev1beta2.BreakRequestTemplateSpec{
+					AutoApprove:       true,
+					ApprovalCondition: "request.spec.reason == 'test'",
+					Items: breaktheglass.TemplateItems{
+						"cm": {ManifestTemplate: runtime.RawExtension{Object: &corev1.ConfigMap{}}},
+					},
+				},
+			},
+			setup: func(cl *mc.MockClient, restMapper *mm.MockRESTMapper) {
+				cl.EXPECT().RESTMapper().Return(restMapper).AnyTimes()
+				cl.EXPECT().Create(gm.Any(), gm.Any(), gm.Any()).DoAndReturn(func(ctx context.Context, review *authorizationv1.SelfSubjectAccessReview, _ ...client.CreateOption) error {
+					review.Status.Allowed = true
+					return nil
+				}).AnyTimes()
+			},
+			expected: 0,
+		},
+		{
+			name: "allow if item schema is valid",
+			brt: &capsulev1beta2.BreakRequestTemplate{
+				Spec: capsulev1beta2.BreakRequestTemplateSpec{
+					Items: breaktheglass.TemplateItems{
+						"test": {
+							ManifestTemplate: runtime.RawExtension{Object: &corev1.ConfigMap{}},
+							ParamSchema:      runtime.RawExtension{Raw: []byte(`{"type": "string"}`)},
+						},
+					},
+				},
+			},
+			setup: func(cl *mc.MockClient, restMapper *mm.MockRESTMapper) {
+				cl.EXPECT().RESTMapper().Return(restMapper).AnyTimes()
+				cl.EXPECT().Create(gm.Any(), gm.Any(), gm.Any()).DoAndReturn(func(ctx context.Context, review *authorizationv1.SelfSubjectAccessReview, _ ...client.CreateOption) error {
+					review.Status.Allowed = true
+					return nil
+				}).AnyTimes()
+			},
+			expected: 0,
+		},
+		{
+			name: "deny if item schema is invalid",
+			brt: &capsulev1beta2.BreakRequestTemplate{
+				Spec: capsulev1beta2.BreakRequestTemplateSpec{
+					Items: breaktheglass.TemplateItems{
+						"test": {
+							ManifestTemplate: runtime.RawExtension{Object: &corev1.ConfigMap{}},
+							ParamSchema:      runtime.RawExtension{Raw: []byte(`"type": `)},
+						},
+					},
+				},
+			},
+			expected: http.StatusForbidden,
+			errMsg:   `error rendering template: paramSchema for item "test" is invalid: failed to validate OpenAPI schemaData: schema invalid`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockCtrl := gm.NewController(t)
+			defer mockCtrl.Finish()
+
+			cl := mc.NewMockClient(mockCtrl)
+			restMapper := newDummyRestMapper(mockCtrl)
+			decoder := &test.Decoder[*capsulev1beta2.BreakRequestTemplate]{
+				Object: tt.brt,
+			}
+			validator := BreakRequestTemplateValidationHandler(log)
+
+			if tt.setup != nil {
+				tt.setup(cl, restMapper)
+			}
+
+			resp := validator.OnCreate(cl, nil, decoder, nil)(ctx, admission.Request{})
+			if tt.expected == 0 {
+				assert.Nil(t, resp)
+			} else {
+				test.VerifyResponse(t, resp, tt.expected, tt.errMsg)
+			}
+
+			resp = validator.OnUpdate(cl, nil, decoder, nil)(ctx, admission.Request{})
+			if tt.expected == 0 {
+				assert.Nil(t, resp)
+			} else {
+				test.VerifyResponse(t, resp, tt.expected, tt.errMsg)
+			}
+		})
+	}
+}
+
+func TestGetResourceAttributes(t *testing.T) {
+	mockCtrl := gm.NewController(t)
+	defer mockCtrl.Finish()
+	restMapper := newDummyRestMapper(mockCtrl)
+
+	t.Run("Valid Items with unique resources", func(t *testing.T) {
+		brt := &capsulev1beta2.BreakRequestTemplate{
 			Spec: capsulev1beta2.BreakRequestTemplateSpec{
-				Items: breaktheglass.TemplateItems{
-					"cm": breaktheglass.TemplateItem{
-						ManifestTemplate: runtime.RawExtension{Object: &corev1.ConfigMap{}},
+				Items: map[string]breaktheglass.TemplateItem{
+					"item1": {
+						ManifestTemplate: runtime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"namespace":""}}`)},
+					},
+					"item2": {
+						ManifestTemplate: runtime.RawExtension{Raw: []byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"namespace":"ns2"}}`)},
 					},
 				},
 			},
 		}
-		decoder = &test.Decoder[*capsulev1beta2.BreakRequestTemplate]{
-			Object: brt,
+
+		attributes, err := getResourceAttributes(brt, restMapper)
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, attributes, []authorizationv1.ResourceAttributes{
+			{Group: "", Version: "v1", Resource: "configmaps"},
+			{Group: "apps", Version: "v1", Resource: "deployments"},
+		})
+	})
+
+	t.Run("Item with invalid manifest", func(t *testing.T) {
+		brt := &capsulev1beta2.BreakRequestTemplate{
+			Spec: capsulev1beta2.BreakRequestTemplateSpec{
+				Items: map[string]breaktheglass.TemplateItem{
+					"item1": {
+						ManifestTemplate: runtime.RawExtension{Raw: []byte((`invalid-json`))},
+					},
+				},
+			},
 		}
-		validator = &breakRequestTemplateValidationHandler{}
-		Expect(validator).NotTo(BeNil(), "Expected validator to be initialized")
-		Expect(brt).NotTo(BeNil(), "Expected brt to be initialized")
+
+		attributes, err := getResourceAttributes(brt, restMapper)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), `manifestTemplate for item "item1" is invalid`)
+		assert.Nil(t, attributes)
 	})
-	AfterEach(func() {
-		defer mockCtrl.Finish()
-	})
 
-	Context("When creating or updating BreakRequestTemplate under Validating Webhook", func() {
-		Context("When auto approval is enabled an condition is not empty", func() {
-			BeforeEach(func() {
-				brt.Spec.AutoApprove = false
-				brt.Spec.ApprovalCondition = "foo"
-			})
-			It("Should deny creation", func() {
-				By("simulating an invalid creation scenario")
-
-				response := validator.OnCreate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				test.VerifyResponse(response, http.StatusForbidden, "approvalCondition should not be set when autoApprove is false")
-			})
-			It("Should deny update", func() {
-				By("simulating an invalid update scenario")
-
-				response := validator.OnUpdate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				test.VerifyResponse(response, http.StatusForbidden, "approvalCondition should not be set when autoApprove is false")
-			})
-		})
-
-		Context("When auto approval is enabled an condition is empty", func() {
-			BeforeEach(func() {
-				brt.Spec.AutoApprove = true
-			})
-			It("Should allow creation", func() {
-				By("simulating an valid creation scenario")
-				response := validator.OnCreate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				Expect(response).To(BeNil())
-			})
-			It("Should allow update", func() {
-				By("simulating an valid update scenario")
-				response := validator.OnUpdate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				Expect(response).To(BeNil())
-			})
-		})
-
-		Context("When auto approval is enabled an condition is invalid", func() {
-			BeforeEach(func() {
-				brt.Spec.AutoApprove = true
-				brt.Spec.ApprovalCondition = "foo.spec.reason == 'test'"
-			})
-			It("Should deny creation", func() {
-				By("simulating an invalid creation scenario")
-				response := validator.OnCreate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				test.VerifyResponse(response, http.StatusForbidden, "approvalCondition is invalid: ERROR: <input>:1:1: undeclared reference to 'foo'")
-			})
-			It("Should deny update", func() {
-				By("simulating an invalid update scenario")
-				response := validator.OnUpdate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				test.VerifyResponse(response, http.StatusForbidden, "approvalCondition is invalid: ERROR: <input>:1:1: undeclared reference to 'foo'")
-			})
-		})
-
-		Context("When auto approval is enabled an condition is valid", func() {
-			BeforeEach(func() {
-				brt.Spec.AutoApprove = true
-				brt.Spec.ApprovalCondition = "request.spec.reason == 'test'"
-			})
-			It("Should allow creation", func() {
-				By("simulating an valid creation scenario")
-				response := validator.OnCreate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				Expect(response).To(BeNil())
-			})
-			It("Should allow update", func() {
-				By("simulating an valid update scenario")
-				response := validator.OnUpdate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				Expect(response).To(BeNil())
-			})
-		})
-
-		Context("When item schema is defined and valid", func() {
-			BeforeEach(func() {
-				brt.Spec.Items = breaktheglass.TemplateItems{
-					"test": {
-						ParamSchema: runtime.RawExtension{Raw: []byte(`{"type": "string"}`)},
+	t.Run("Missing apiVersion and kind in manifest", func(t *testing.T) {
+		brt := &capsulev1beta2.BreakRequestTemplate{
+			Spec: capsulev1beta2.BreakRequestTemplateSpec{
+				Items: map[string]breaktheglass.TemplateItem{
+					"item1": {
+						ManifestTemplate: runtime.RawExtension{Raw: []byte((`{"metadata":{"namespace":""}}`))},
 					},
-				}
-			})
-			It("Should allow creation", func() {
-				By("simulating an valid creation scenario")
-				response := validator.OnCreate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				Expect(response).To(BeNil())
-			})
-			It("Should allow update", func() {
-				By("simulating an valid update scenario")
-				response := validator.OnUpdate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				Expect(response).To(BeNil())
-			})
-		})
-		Context("When item schema is defined and invalid", func() {
-			BeforeEach(func() {
-				brt.Spec.Items = breaktheglass.TemplateItems{
-					"test": {
-						ParamSchema: runtime.RawExtension{Raw: []byte(`"type": `)},
-					},
-				}
-			})
-			It("Should allow creation", func() {
-				By("simulating an invalid creation scenario")
-				response := validator.OnCreate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				test.VerifyResponse(response, http.StatusForbidden, `error rendering template: paramSchema for item "test" is invalid: failed to validate OpenAPI schemaData: schema invalid`)
-			})
-			It("Should allow update", func() {
-				By("simulating an invalid update scenario")
-				response := validator.OnUpdate(cl, reader, decoder, nil)(ctx, admission.Request{})
-				test.VerifyResponse(response, http.StatusForbidden, `error rendering template: paramSchema for item "test" is invalid: failed to validate OpenAPI schemaData: schema invalid`)
-			})
-		})
+				},
+			},
+		}
+
+		attributes, err := getResourceAttributes(brt, restMapper)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), `manifestTemplate for item "item1" is invalid: Object 'Kind' is missing in`)
+		assert.Nil(t, attributes)
 	})
-})
+
+	t.Run("Duplicate resources should only appear once", func(t *testing.T) {
+		brt := &capsulev1beta2.BreakRequestTemplate{
+			Spec: capsulev1beta2.BreakRequestTemplateSpec{
+				Items: map[string]breaktheglass.TemplateItem{
+					"item1": {
+						ManifestTemplate: runtime.RawExtension{Raw: []byte((`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"namespace":""}}`))},
+					},
+					"item2": {
+						ManifestTemplate: runtime.RawExtension{Raw: []byte((`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"namespace":""}}`))},
+					},
+				},
+			},
+		}
+
+		attributes, err := getResourceAttributes(brt, restMapper)
+		assert.NoError(t, err)
+		assert.Len(t, attributes, 1)
+		assert.Contains(t, attributes, authorizationv1.ResourceAttributes{Group: "", Version: "v1", Resource: "configmaps"})
+	})
+
+	t.Run("Failed to map resource", func(t *testing.T) {
+		brt := &capsulev1beta2.BreakRequestTemplate{
+			Spec: capsulev1beta2.BreakRequestTemplateSpec{
+				Items: map[string]breaktheglass.TemplateItem{
+					"item1": {
+						ManifestTemplate: runtime.RawExtension{Raw: []byte((`{"apiVersion":"v1","kind":"UnknownKind","metadata":{"namespace":""}}`))},
+					},
+				},
+			},
+		}
+		localMockCtrl := gm.NewController(t)
+		defer localMockCtrl.Finish()
+		localRestMapper := mm.NewMockRESTMapper(localMockCtrl)
+		localRestMapper.EXPECT().RESTMapping(gm.Any(), gm.Any()).Return(nil, errors.New("invalid resource"))
+
+		attributes, err := getResourceAttributes(brt, localRestMapper)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot resolve resource for manifestTemplate")
+		assert.Nil(t, attributes)
+	})
+}
+
+func newDummyRestMapper(mockCtrl *gm.Controller) *mm.MockRESTMapper {
+	restMapper := mm.NewMockRESTMapper(mockCtrl)
+	restMapper.EXPECT().RESTMapping(gm.Any(), gm.Any()).DoAndReturn(func(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
+		mapping := &meta.RESTMapping{
+			GroupVersionKind: schema.GroupVersionKind{Group: gk.Group, Version: versions[0], Kind: gk.Kind},
+			Resource:         schema.GroupVersionResource{Group: gk.Group, Version: versions[0], Resource: strings.ToLower(gk.Kind) + "s"}, // simplified just lowercase and append 's'
+		}
+		return mapping, nil
+	}).AnyTimes()
+	return restMapper
+}

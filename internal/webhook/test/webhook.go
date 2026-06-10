@@ -4,15 +4,17 @@
 package test
 
 import (
-	"github.com/onsi/ginkgo/v2"
-	"github.com/onsi/gomega"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 // VerifyResponse is a helper function to verify the response of a webhook function.
-func VerifyResponse(response *admission.Response, status int32, message string) {
-	ginkgo.GinkgoT().Helper()
-	gomega.Expect(response.Result).NotTo(gomega.BeNil())
-	gomega.Expect(response.Result.Code).To(gomega.Equal(status))
-	gomega.Expect(response.Result.Message).To(gomega.ContainSubstring(message))
+func VerifyResponse(tb testing.TB, response *admission.Response, status int32, message string) {
+	tb.Helper()
+	require.NotNil(tb, response.Result)
+	assert.Equal(tb, status, response.Result.Code)
+	assert.Contains(tb, response.Result.Message, message, "expected message %q to contain %q", response.Result.Message, message)
 }
