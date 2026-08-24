@@ -7,52 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projectcapsule/capsule/pkg/api/breaktheglass"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
-
-func TestSetReviewer(t *testing.T) {
-	reviewer := &breaktheglass.AccessEntity{Type: breaktheglass.AccessEntityTypeUser, Name: "test-user"}
-	tests := []struct {
-		name             string
-		ar               *BreakRequest
-		entity           *breaktheglass.AccessEntity
-		conditionMessage string
-		verdict          RequestVerdict
-		expectedReview   *ReviewInfo
-	}{
-		{
-			name:             "set reviewer successfully",
-			ar:               &BreakRequest{},
-			entity:           reviewer,
-			conditionMessage: "Approved",
-			verdict:          RequestVerdictApproved,
-			expectedReview: &ReviewInfo{
-				Reviewer: reviewer,
-				Message:  "Approved",
-				Verdict:  RequestVerdictApproved,
-			},
-		},
-		{
-			name:             "nil entity does not set reviewer",
-			ar:               &BreakRequest{},
-			entity:           nil,
-			conditionMessage: "No review",
-			verdict:          RequestVerdictDenied,
-			expectedReview:   nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			setReviewer(tt.ar, tt.entity, tt.conditionMessage, tt.verdict)
-			assert.Equal(t, tt.expectedReview, tt.ar.Status.Review)
-		})
-	}
-}
 
 func TestTransitionRequestPhase(t *testing.T) {
 	request := &BreakRequest{}
@@ -86,7 +45,7 @@ func TestTransitionRequestPhase(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			request.Status.Phase = tt.initPhase
-			err := request.transitionRequestPhase(tt.phase, "test", "reason", now, nil)
+			err := request.transitionRequestPhase(tt.phase, "test", "reason", now)
 			if tt.expectError {
 				assert.Error(t, err)
 			} else {
@@ -118,22 +77,18 @@ func TestInitializeFromTemplate(t *testing.T) {
 
 func TestApproveRequest(t *testing.T) {
 	br := &BreakRequest{}
-	entity := &breaktheglass.AccessEntity{Name: "reviewer", Type: breaktheglass.AccessEntityTypeUser}
 	props := &ApprovedProperties{Duration: &metav1.Duration{Duration: time.Hour}}
-	err := br.ApproveRequest(entity, props, "Approved")
+	err := br.ApproveRequest(props, "Approved")
 	require.NoError(t, err)
 	assert.Equal(t, RequestPhaseApproved, br.Status.Phase)
-	assert.Equal(t, entity, br.Status.Review.Reviewer)
 	assert.Equal(t, props.Duration, br.Status.Approved.Duration)
 }
 
 func TestDenyRequest(t *testing.T) {
 	br := &BreakRequest{}
-	entity := &breaktheglass.AccessEntity{Name: "reviewer", Type: breaktheglass.AccessEntityTypeUser}
-	err := br.DenyRequest(entity, "Denied")
+	err := br.DenyRequest("Denied")
 	require.NoError(t, err)
 	assert.Equal(t, RequestPhaseDenied, br.Status.Phase)
-	assert.Equal(t, entity, br.Status.Review.Reviewer)
 	assert.Equal(t, "Denied", br.Status.Review.Message)
 }
 
@@ -154,7 +109,6 @@ func TestActiveRequest(t *testing.T) {
 	tests := []struct {
 		name               string
 		br                 *BreakRequest
-		entity             *breaktheglass.AccessEntity
 		wantErr            string
 		expectedPhase      RequestPhase
 		expectActiveNotNil bool
@@ -170,7 +124,6 @@ func TestActiveRequest(t *testing.T) {
 					},
 				},
 			},
-			entity:             &breaktheglass.AccessEntity{Name: "user", Type: breaktheglass.AccessEntityTypeUser},
 			wantErr:            "can only activate an approved request",
 			expectedPhase:      RequestPhaseActive,
 			expectActiveNotNil: true,
@@ -190,7 +143,6 @@ func TestActiveRequest(t *testing.T) {
 					Phase: RequestPhaseApproved,
 				},
 			},
-			entity:             &breaktheglass.AccessEntity{Name: "user", Type: breaktheglass.AccessEntityTypeUser},
 			wantErr:            "",
 			expectedPhase:      RequestPhaseActive,
 			expectActiveNotNil: true,
@@ -210,7 +162,6 @@ func TestActiveRequest(t *testing.T) {
 					Phase: RequestPhaseApproved,
 				},
 			},
-			entity:             &breaktheglass.AccessEntity{Name: "user", Type: breaktheglass.AccessEntityTypeUser},
 			wantErr:            "",
 			expectedPhase:      RequestPhaseActive,
 			expectActiveNotNil: true,
@@ -228,7 +179,6 @@ func TestActiveRequest(t *testing.T) {
 					Phase:    RequestPhaseApproved,
 				},
 			},
-			entity:             &breaktheglass.AccessEntity{Name: "user", Type: breaktheglass.AccessEntityTypeUser},
 			wantErr:            "",
 			expectedPhase:      RequestPhaseActive,
 			expectActiveNotNil: true,
@@ -248,7 +198,6 @@ func TestActiveRequest(t *testing.T) {
 					Phase: RequestPhaseApproved,
 				},
 			},
-			entity:             nil,
 			wantErr:            "",
 			expectedPhase:      RequestPhaseActive,
 			expectActiveNotNil: true,
@@ -265,7 +214,6 @@ func TestActiveRequest(t *testing.T) {
 					Phase: RequestPhaseApproved,
 				},
 			},
-			entity:             &breaktheglass.AccessEntity{Name: "user", Type: breaktheglass.AccessEntityTypeUser},
 			wantErr:            "template not set",
 			expectedPhase:      RequestPhaseActive,
 			expectActiveNotNil: true,
@@ -275,7 +223,7 @@ func TestActiveRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.br.ActiveRequest(tt.entity)
+			err := tt.br.ActiveRequest()
 			if tt.wantErr != "" {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)

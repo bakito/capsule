@@ -30,8 +30,6 @@ type breakRequestValidationHandler struct {
 
 func (b *breakRequestValidationHandler) OnCreate(_ client.Client, reader client.Reader, decoder admission.Decoder, _ events.EventRecorder) handlers.Func {
 	return func(ctx context.Context, req admission.Request) *admission.Response {
-		b.log.Info("Validation for BreakRequest upon creation", "name", req.Name)
-
 		br := &capsulev1beta2.BreakRequest{}
 		if err := decoder.Decode(req, br); err != nil {
 			return ad.ErroredResponse(fmt.Errorf("failed to decode new object: %w", err))
@@ -62,16 +60,12 @@ func (b *breakRequestValidationHandler) OnCreate(_ client.Client, reader client.
 			return ad.Denyf("invalid template rendering for %s: %v", br.Spec.TemplateName, err)
 		}
 
+		// check approval req with user info
+		// req.UserInfo. ev user und date setzen im mutation
+
 		return nil
 	}
 }
-
-func (b *breakRequestValidationHandler) OnDelete(_ client.Client, _ client.Reader, _ admission.Decoder, _ events.EventRecorder) handlers.Func {
-	return func(_ context.Context, _ admission.Request) *admission.Response {
-		return nil
-	}
-}
-
 func (b *breakRequestValidationHandler) OnUpdate(_ client.Client, _ client.Reader, decoder admission.Decoder, _ events.EventRecorder) handlers.Func {
 	return func(_ context.Context, req admission.Request) *admission.Response {
 		oldBr := &capsulev1beta2.BreakRequest{}
@@ -93,6 +87,12 @@ func (b *breakRequestValidationHandler) OnUpdate(_ client.Client, _ client.Reade
 			)
 		}
 
+		return nil
+	}
+}
+
+func (b *breakRequestValidationHandler) OnDelete(_ client.Client, _ client.Reader, _ admission.Decoder, _ events.EventRecorder) handlers.Func {
+	return func(_ context.Context, _ admission.Request) *admission.Response {
 		return nil
 	}
 }

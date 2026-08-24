@@ -17,8 +17,6 @@ type BreakRequestSpec struct {
 	TemplateName string `json:"templateName"`
 	// Params the parameters to use for the template.
 	Params *runtime.RawExtension `json:"params,omitempty"`
-	// Requesting actor for the access request.
-	Requestor breaktheglass.AccessEntity `json:"requestor,omitempty"`
 	// A reason on why the request is needed
 	Reason string `json:"reason,omitempty"`
 	// The duration of this BreakRequest should be valid for.
@@ -36,6 +34,9 @@ type BreakRequestSpec struct {
 
 // BreakRequestStatus defines the observed state of BreakRequest.
 type BreakRequestStatus struct {
+
+	// RequestedBy is the user who created the request
+	RequestedBy *BreakRequestUserInfo `json:"requestedBy,omitempty"`
 	// Review refers to the subject that either approved or denied the request
 	Review *ReviewInfo `json:"review,omitempty"`
 	// Template properties copied from the assigned template
@@ -87,7 +88,8 @@ type ApprovedProperties struct {
 // ReviewInfo contains information about the review of a request.
 type ReviewInfo struct {
 	// The Entity reviewing this request
-	Reviewer *breaktheglass.AccessEntity `json:"reviewer,omitempty"`
+	ReviewerInfo *BreakRequestUserInfo `json:"reviewerInfo,omitempty"`
+
 	// The verdict made by the reviewing entity
 	// +kubebuilder:validation:Enum=Pending;Denied;Approved
 	Verdict RequestVerdict `json:"verdict,omitempty"`
@@ -106,9 +108,9 @@ const (
 type RequestPhase string
 
 const (
-	RequestPhaseRequested RequestPhase = "Requested"
+	RequestPhaseRequested RequestPhase = "Requested" // request is requested
 	RequestPhasePending   RequestPhase = "Pending"
-	RequestPhaseDenied    RequestPhase = "Denied"
+	RequestPhaseDenied    RequestPhase = "Denied" // request is denied
 	RequestPhaseApproved  RequestPhase = "Approved"
 	RequestPhaseActive    RequestPhase = "Active"
 	RequestPhaseExpired   RequestPhase = "Expired"
@@ -140,4 +142,16 @@ type BreakRequestList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 
 	Items []BreakRequest `json:"items"`
+}
+
+type BreakRequestUserInfo struct {
+	Username string   `json:"username,omitempty"`
+	Groups   []string `json:"groups,omitempty"`
+
+	ServiceAccount *BreakRequestServiceAccount `json:"serviceAccount,omitempty"`
+}
+
+type BreakRequestServiceAccount struct {
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
 }

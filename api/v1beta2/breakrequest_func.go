@@ -35,7 +35,6 @@ func (br *BreakRequest) SetRequested() (err error) {
 		"Pending Review",
 		"PendingReview",
 		metav1.Now(),
-		nil,
 	); err != nil {
 		return err
 	}
@@ -54,7 +53,6 @@ func (br *BreakRequest) SetPending() (err error) {
 		"Access request pending",
 		"PendingBySystem",
 		metav1.Now(),
-		nil,
 	); err != nil {
 		return err
 	}
@@ -64,7 +62,6 @@ func (br *BreakRequest) SetPending() (err error) {
 
 // ApproveRequest Approves the BreakRequest. Depending on the start time, it may also directly activate the request.
 func (br *BreakRequest) ApproveRequest(
-	entity *breaktheglass.AccessEntity,
 	properties *ApprovedProperties,
 	reason string,
 ) (err error) {
@@ -75,9 +72,8 @@ func (br *BreakRequest) ApproveRequest(
 	if err := br.transitionRequestPhase(
 		RequestPhaseApproved,
 		reason,
-		"ApprovedBy"+entity.Type.String(),
+		"Approved",
 		metav1.Now(),
-		entity,
 	); err != nil {
 		return err
 	}
@@ -88,16 +84,15 @@ func (br *BreakRequest) ApproveRequest(
 	br.Status.Approved = properties
 
 	br.Status.Review = &ReviewInfo{
-		Reviewer: entity,
-		Verdict:  RequestVerdictApproved,
-		Message:  reason,
+		Verdict: RequestVerdictApproved,
+		Message: reason,
 	}
 
 	return err
 }
 
 // DenyRequest Denies the BreakRequest. It may directly transition to the Denied phase or set a reason for denial.
-func (br *BreakRequest) DenyRequest(entity *breaktheglass.AccessEntity, reason string) (err error) {
+func (br *BreakRequest) DenyRequest(reason string) (err error) {
 	if reason == "" {
 		reason = "Access request denied"
 	}
@@ -107,22 +102,20 @@ func (br *BreakRequest) DenyRequest(entity *breaktheglass.AccessEntity, reason s
 		reason,
 		"DeniedByReviewer",
 		metav1.Now(),
-		entity,
 	); err != nil {
 		return err
 	}
 
 	br.Status.Review = &ReviewInfo{
-		Reviewer: entity,
-		Verdict:  RequestVerdictDenied,
-		Message:  reason,
+		Verdict: RequestVerdictDenied,
+		Message: reason,
 	}
 
 	return err
 }
 
 // ActiveRequest Activates the BreakRequest, allowing the subject to access the requested resources.
-func (br *BreakRequest) ActiveRequest(entity *breaktheglass.AccessEntity) (err error) {
+func (br *BreakRequest) ActiveRequest() (err error) {
 	now := metav1.Now()
 
 	if err := br.transitionRequestPhase(
@@ -130,7 +123,6 @@ func (br *BreakRequest) ActiveRequest(entity *breaktheglass.AccessEntity) (err e
 		"Access request activated",
 		"ActivatedBySystem",
 		now,
-		entity,
 	); err != nil {
 		return err
 	}
@@ -189,7 +181,7 @@ func (br *BreakRequest) ActiveRequest(entity *breaktheglass.AccessEntity) (err e
 
 // ExpireRequest When a request is active, it can be expired. This indicates that the granted access is revoked, however,
 // this Request itself may be present longer, for auditing purposes.
-func (br *BreakRequest) ExpireRequest(entity *breaktheglass.AccessEntity) (err error) {
+func (br *BreakRequest) ExpireRequest() (err error) {
 	now := metav1.Now()
 
 	if err := br.transitionRequestPhase(
@@ -197,7 +189,6 @@ func (br *BreakRequest) ExpireRequest(entity *breaktheglass.AccessEntity) (err e
 		"Access request expired",
 		"ExpiredBySystem",
 		now,
-		entity,
 	); err != nil {
 		return err
 	}
@@ -291,7 +282,6 @@ func (br *BreakRequest) transitionRequestPhase(
 	conditionMessage string,
 	reason string,
 	now metav1.Time,
-	entity *breaktheglass.AccessEntity,
 ) error {
 	// Prevent duplicate condition entries of the same type
 	for _, cond := range br.Status.Conditions {
@@ -307,14 +297,10 @@ func (br *BreakRequest) transitionRequestPhase(
 			return fmt.Errorf("cannot deny an already approved or active request")
 		}
 
-		setReviewer(br, entity, conditionMessage, RequestVerdictDenied)
-
 	case RequestPhaseApproved:
 		if br.Status.Phase == RequestPhaseDenied {
 			return fmt.Errorf("cannot approve a denied request")
 		}
-
-		setReviewer(br, entity, conditionMessage, RequestVerdictApproved)
 
 	case RequestPhaseActive:
 		if br.Status.Phase != RequestPhaseApproved {
@@ -346,19 +332,4 @@ func (br *BreakRequest) transitionRequestPhase(
 	br.Status.Phase = newPhase
 
 	return nil
-}
-
-func setReviewer(
-	ar *BreakRequest,
-	entity *breaktheglass.AccessEntity,
-	conditionMessage string,
-	verdict RequestVerdict,
-) {
-	if entity != nil {
-		ar.Status.Review = &ReviewInfo{
-			Reviewer: entity,
-			Message:  conditionMessage,
-			Verdict:  verdict,
-		}
-	}
 }

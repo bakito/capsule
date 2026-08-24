@@ -3,10 +3,28 @@
 
 package route
 
-import "github.com/projectcapsule/capsule/pkg/runtime/handlers"
+import (
+	"github.com/projectcapsule/capsule/pkg/runtime/handlers"
+)
+
+func BreakRequestMutation(handler ...handlers.Handler) handlers.Webhook {
+	return &breakRequestMutation{handlers: handler}
+}
+
+type breakRequestMutation struct {
+	handlers []handlers.Handler
+}
+
+func (v *breakRequestMutation) GetHandlers() []handlers.Handler {
+	return v.handlers
+}
+
+func (v *breakRequestMutation) GetPath() string {
+	return "/breakrequests/mutating"
+}
 
 func BreakRequestValidation(handler ...handlers.Handler) handlers.Webhook {
-	return &breakRequestValidation{handlers: handler}
+	return &breakRequestMutation{handlers: handler}
 }
 
 type breakRequestValidation struct {

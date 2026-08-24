@@ -26,7 +26,6 @@ import (
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
 	"github.com/projectcapsule/capsule/internal/controllers/utils"
 	"github.com/projectcapsule/capsule/internal/metrics"
-	"github.com/projectcapsule/capsule/pkg/api/breaktheglass"
 	"github.com/projectcapsule/capsule/pkg/api/meta"
 	"github.com/projectcapsule/capsule/pkg/conditions"
 	evt "github.com/projectcapsule/capsule/pkg/runtime/events"
@@ -171,7 +170,7 @@ func (r *BreakRequestReconciler) reconcile(
 						"Break request expired",
 					)
 
-					return ctrl.Result{}, br.ExpireRequest(nil)
+					return ctrl.Result{}, br.ExpireRequest()
 				}
 
 				log.V(5).Info("Re-queueing when expiration is due")
@@ -226,9 +225,7 @@ func (r *BreakRequestReconciler) reconcile(
 				return ctrl.Result{}, err
 			}
 
-			err = br.ApproveRequest(&breaktheglass.AccessEntity{
-				Type: breaktheglass.AccessEntityTypeSystem,
-			}, props, "Auto Approved")
+			err = br.ApproveRequest(props, "Auto Approved")
 
 			return ctrl.Result{}, err
 		} else if err != nil {
@@ -337,7 +334,7 @@ func (r *BreakRequestReconciler) transitionRequestActivation(
 	// Avoid persisting the Active phase when item reconciliation fails.
 	brCopy := br.DeepCopy()
 
-	if err := brCopy.ActiveRequest(nil); err != nil {
+	if err := brCopy.ActiveRequest(); err != nil {
 		return err
 	}
 

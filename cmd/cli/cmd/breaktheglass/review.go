@@ -47,7 +47,7 @@ var reviewCmd = &cobra.Command{
 
 		ctx := context.Background()
 
-		cfg, k8sClient, err := newK8sClient()
+		_, k8sClient, err := newK8sClient()
 		if err != nil {
 			return err
 		}
@@ -145,11 +145,6 @@ var reviewCmd = &cobra.Command{
 			}
 		}
 
-		user := &breaktheglass.AccessEntity{
-			Type: breaktheglass.AccessEntityTypeUser,
-			Name: cfg.Username,
-		}
-
 		return retry.OnError(
 			retry.DefaultRetry,
 			apierrors.IsConflict,
@@ -164,11 +159,11 @@ var reviewCmd = &cobra.Command{
 
 				switch action {
 				case approveValue:
-					if err := br.ApproveRequest(user, props, message); err != nil {
+					if err := br.ApproveRequest(props, message); err != nil {
 						return err
 					}
 				case denyValue:
-					if err := br.DenyRequest(user, message); err != nil {
+					if err := br.DenyRequest(message); err != nil {
 						return err
 					}
 				}

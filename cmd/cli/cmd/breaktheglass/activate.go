@@ -7,7 +7,6 @@ import (
 	"github.com/spf13/cobra"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
-	"github.com/projectcapsule/capsule/pkg/api/breaktheglass"
 )
 
 var activateCmd = &cobra.Command{
@@ -24,9 +23,8 @@ var activateCmd = &cobra.Command{
 		return runBreakRequestAction(
 			func(
 				br *capsulev1beta2.BreakRequest,
-				user *breaktheglass.AccessEntity,
 			) error {
-				return br.ActiveRequest(user)
+				return br.ActiveRequest()
 			},
 		)
 	},

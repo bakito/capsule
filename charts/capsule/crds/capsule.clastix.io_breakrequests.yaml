@@ -75,20 +75,6 @@ spec:
               reason:
                 description: A reason on why the request is needed
                 type: string
-              requestor:
-                description: Requesting actor for the access request.
-                properties:
-                  name:
-                    description: The name of the entity
-                    type: string
-                  type:
-                    description: The type of the entity
-                    enum:
-                    - User
-                    - Group
-                    - System
-                    type: string
-                type: object
               startTime:
                 description: |-
                   Optional point in time when the access should begin. Must be in the future.
@@ -208,6 +194,23 @@ spec:
                 - Active
                 - Expired
                 type: string
+              requestedBy:
+                description: RequestedBy is the user who created the request
+                properties:
+                  groups:
+                    items:
+                      type: string
+                    type: array
+                  serviceAccount:
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    type: object
+                  username:
+                    type: string
+                type: object
               review:
                 description: Review refers to the subject that either approved or
                   denied the request
@@ -215,18 +218,21 @@ spec:
                   message:
                     description: Message with the review
                     type: string
-                  reviewer:
+                  reviewerInfo:
                     description: The Entity reviewing this request
                     properties:
-                      name:
-                        description: The name of the entity
-                        type: string
-                      type:
-                        description: The type of the entity
-                        enum:
-                        - User
-                        - Group
-                        - System
+                      groups:
+                        items:
+                          type: string
+                        type: array
+                      serviceAccount:
+                        properties:
+                          name:
+                            type: string
+                          namespace:
+                            type: string
+                        type: object
+                      username:
                         type: string
                     type: object
                   verdict:

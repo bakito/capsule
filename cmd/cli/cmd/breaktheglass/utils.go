@@ -24,7 +24,6 @@ import (
 	"sigs.k8s.io/yaml"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
-	"github.com/projectcapsule/capsule/pkg/api/breaktheglass"
 )
 
 func printBreakRequestsApprovalTable(
@@ -175,18 +174,13 @@ func newK8sClient() (*rest.Config, ctrlclient.Client, error) {
 }
 
 func runBreakRequestAction(
-	action func(br *capsulev1beta2.BreakRequest, user *breaktheglass.AccessEntity) error,
+	action func(br *capsulev1beta2.BreakRequest) error,
 ) error {
 	ctx := context.Background()
 
-	cfg, k8sClient, err := newK8sClient()
+	_, k8sClient, err := newK8sClient()
 	if err != nil {
 		return err
-	}
-
-	user := &breaktheglass.AccessEntity{
-		Type: breaktheglass.AccessEntityTypeUser,
-		Name: cfg.Username,
 	}
 
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -199,7 +193,7 @@ func runBreakRequestAction(
 			return err
 		}
 
-		if err := action(br, user); err != nil {
+		if err := action(br); err != nil {
 			return err
 		}
 
