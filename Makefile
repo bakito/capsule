@@ -550,6 +550,10 @@ e2e-install-openshift: helm-controller-version ko-build-all
 		capsule \
 		./charts/capsule
 
+.PHONY: e2e-follow-capsule-manager-logs
+e2e-follow-capsule-manager-logs:
+	kubectl logs -n capsule-system -l app.kubernetes.io/instance=capsule,app.kubernetes.io/name=capsule -f
+
 .PHONY: trace-install
 trace-install:
 	helm upgrade \
