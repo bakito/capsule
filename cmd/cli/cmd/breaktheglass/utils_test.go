@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
+	breaktheglassapi "github.com/projectcapsule/capsule/pkg/api/breaktheglass"
 	apimeta "github.com/projectcapsule/capsule/pkg/api/meta"
 	apiruntime "github.com/projectcapsule/capsule/pkg/api/runtime"
 )
@@ -138,13 +139,15 @@ func TestPatchBreakRequestStatusPreservesControllerManagedFields(t *testing.T) {
 		Name:      "template-runner",
 		Namespace: "operations",
 	}
+	approvals := &breaktheglassapi.ApprovalSpec{Conditions: []string{`requestor.name == "alice"`}}
 	stored := &capsulev1beta2.BreakRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "request", Namespace: "tenant"},
 		Status: capsulev1beta2.BreakRequestStatus{
-			Phase:          capsulev1beta2.RequestPhaseActive,
-			ServiceAccount: serviceAccount,
-			Approved: &capsulev1beta2.ApprovedProperties{
-				Resources: managedResources,
+			Phase: capsulev1beta2.RequestPhaseActive,
+			Request: &capsulev1beta2.BreakRequestStatusRequest{
+				Impersonation: serviceAccount,
+				Approvals:     approvals,
+				Resources:     managedResources,
 			},
 		},
 	}
@@ -158,10 +161,12 @@ func TestPatchBreakRequestStatusPreservesControllerManagedFields(t *testing.T) {
 	// controller-owned status fields.
 	partial := &capsulev1beta2.BreakRequest{}
 	require.NoError(t, k8sClient.Get(ctx, ctrlclient.ObjectKeyFromObject(stored), partial))
-	expectedManagedResources := partial.Status.Approved.Resources
-	expectedServiceAccount := partial.Status.ServiceAccount
-	partial.Status.Approved.Resources = nil
-	partial.Status.ServiceAccount = nil
+	expectedManagedResources := partial.Status.Request.Resources
+	expectedServiceAccount := partial.Status.Request.Impersonation
+	expectedApprovals := partial.Status.Request.Approvals.DeepCopy()
+	partial.Status.Request.Resources = nil
+	partial.Status.Request.Impersonation = nil
+	partial.Status.Request.Approvals = nil
 
 	require.NoError(t, patchBreakRequestStatus(ctx, k8sClient, partial, func() error {
 		partial.Status.Phase = capsulev1beta2.RequestPhaseExpired
@@ -172,6 +177,7 @@ func TestPatchBreakRequestStatusPreservesControllerManagedFields(t *testing.T) {
 	current := &capsulev1beta2.BreakRequest{}
 	require.NoError(t, k8sClient.Get(ctx, ctrlclient.ObjectKeyFromObject(stored), current))
 	assert.Equal(t, capsulev1beta2.RequestPhaseExpired, current.Status.Phase)
-	assert.Equal(t, expectedManagedResources, current.Status.Approved.Resources)
-	assert.Equal(t, expectedServiceAccount, current.Status.ServiceAccount)
+	assert.Equal(t, expectedManagedResources, current.Status.Request.Resources)
+	assert.Equal(t, expectedServiceAccount, current.Status.Request.Impersonation)
+	assert.Equal(t, expectedApprovals, current.Status.Request.Approvals)
 }

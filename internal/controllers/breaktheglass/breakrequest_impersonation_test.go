@@ -143,9 +143,9 @@ func TestResourceClientPinsTemplateIdentity(t *testing.T) {
 	if got != impersonated {
 		t.Fatalf("resourceClient() = %T, want cached impersonated client", got)
 	}
-	if br.Status.ServiceAccount == nil || br.Status.ServiceAccount.Name != "template" ||
-		br.Status.ServiceAccount.Namespace != "template-ns" {
-		t.Fatalf("pinned ServiceAccount = %#v", br.Status.ServiceAccount)
+	if br.Status.Request.Impersonation == nil || br.Status.Request.Impersonation.Name != "template" ||
+		br.Status.Request.Impersonation.Namespace != "template-ns" {
+		t.Fatalf("pinned ServiceAccount = %#v", br.Status.Request.Impersonation)
 	}
 
 	// A request keeps using its initially resolved identity even if its template
@@ -186,12 +186,12 @@ func TestResourceClientPinsControllerIdentityWithoutImpersonation(t *testing.T) 
 			if got != base {
 				t.Fatalf("resourceClient() = %T, want controller client", got)
 			}
-			if br.Status.ServiceAccount == nil {
+			if br.Status.Request.Impersonation == nil {
 				t.Fatal("controller ServiceAccount was not posted to BreakRequest status")
 			}
-			if br.Status.ServiceAccount.Name != "capsule-controller" ||
-				br.Status.ServiceAccount.Namespace != "capsule-system" {
-				t.Fatalf("controller ServiceAccount = %#v, want capsule-system/capsule-controller", br.Status.ServiceAccount)
+			if br.Status.Request.Impersonation.Name != "capsule-controller" ||
+				br.Status.Request.Impersonation.Namespace != "capsule-system" {
+				t.Fatalf("controller ServiceAccount = %#v, want capsule-system/capsule-controller", br.Status.Request.Impersonation)
 			}
 		})
 	}
@@ -253,12 +253,12 @@ func TestTemplateContextUsesImpersonatedClient(t *testing.T) {
 		t.Fatalf("renderResources() error = %v", err)
 	}
 
-	if br.Status.Approved == nil ||
-		len(br.Status.Approved.Resources) != 1 ||
-		len(br.Status.Approved.Resources[0].Targets) != 1 {
-		t.Fatalf("rendered resources = %#v", br.Status.Approved)
+	if br.Status.Request == nil ||
+		len(br.Status.Request.Resources) != 1 ||
+		len(br.Status.Request.Resources[0].Targets) != 1 {
+		t.Fatalf("rendered resources = %#v", br.Status.Request)
 	}
-	obj, err := object(br.Status.Approved.Resources[0].Targets[0])
+	obj, err := object(br.Status.Request.Resources[0].Targets[0])
 	if err != nil {
 		t.Fatalf("decoding rendered target: %v", err)
 	}

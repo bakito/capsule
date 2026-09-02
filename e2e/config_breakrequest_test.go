@@ -5,6 +5,7 @@ package e2e
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -30,6 +31,7 @@ const (
 	breakRequestDefaultServiceAccount      = "e2e-btg-default-runner"
 	breakRequestLocalDefaultServiceAccount = "e2e-btg-local-default-runner"
 	breakRequestReadOnlyServiceAccount     = "e2e-btg-readonly-runner"
+	breakRequestRetryRequester             = "e2e-btg-retry-requester"
 )
 
 var _ = Describe(
@@ -149,8 +151,29 @@ data:
 				cm.Data["updated"] = "by-template-service-account"
 				Expect(templateClient.Update(ctx, cm)).To(Succeed())
 
+				By("protecting the template ServiceAccount copied to BreakRequest status")
+				executionServiceAccount := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+					Name:      breakRequestTemplateServiceAccount,
+					Namespace: breakRequestServiceAccountNamespace,
+				}}
+				Eventually(func() bool {
+					err := k8sClient.Delete(ctx, executionServiceAccount, client.DryRunAll)
+
+					return apierrors.IsForbidden(err)
+				}, defaultTimeoutInterval, defaultPollInterval).Should(BeTrue())
+
 				expireActiveBreakRequest(ctx, br)
 				expectBreakRequestAndConfigMapDeleted(ctx, br, cm)
+
+				By("allowing deletion after the referencing BreakRequest has expired")
+				Eventually(func() error {
+					return k8sClient.Delete(ctx, executionServiceAccount)
+				}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+				Eventually(func() bool {
+					err := k8sClient.Get(ctx, client.ObjectKeyFromObject(executionServiceAccount), executionServiceAccount)
+
+					return apierrors.IsNotFound(err)
+				}, defaultTimeoutInterval, defaultPollInterval).Should(BeTrue())
 			})
 		})
 
@@ -260,6 +283,8 @@ data:
 		})
 
 		Context("without sufficient target permissions", func() {
+			var requesterClient client.Client
+
 			BeforeEach(func() {
 				brt.Spec.Impersonation = breakRequestServiceAccountReference(
 					breakRequestServiceAccountNamespace,
@@ -270,15 +295,20 @@ data:
 					breakRequestReadOnlyServiceAccount,
 					[]string{"get", "list", "watch"},
 				)
+				grantBreakRequestNamespaceAdmin(ctx, "default", breakRequestRetryRequester)
+				requesterClient = impersonationClient(
+					breakRequestRetryRequester,
+					[]string{"system:authenticated"},
+				)
 			})
 
-			It("reports the impersonated apply failure in BreakRequest status", func() {
+			It("fails preflight and lets the requester retry after permissions are fixed", func() {
 				br := newImpersonatedBreakRequest("e2e-btg-impersonation-forbidden", brt.Name)
 				DeferCleanup(func() {
 					expireBreakRequestForCleanup(ctx, br)
 					EventuallyDeletion(br)
 				})
-				EventuallyCreation(func() error { return k8sClient.Create(ctx, br) }).Should(Succeed())
+				EventuallyCreation(func() error { return requesterClient.Create(ctx, br) }).Should(Succeed())
 
 				Eventually(func(g Gomega) {
 					current := &capsulev1beta2.BreakRequest{}
@@ -293,19 +323,124 @@ data:
 					ready := k8smeta.FindStatusCondition(current.Status.Conditions, apimeta.ReadyCondition)
 					g.Expect(ready).NotTo(BeNil())
 					g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-					g.Expect(ready.Reason).To(Equal("ResourceApplyFailed"))
+					g.Expect(ready.Reason).To(Equal("ResourceDryRunFailed"))
 					g.Expect(ready.Message).To(ContainSubstring("forbidden"))
-					g.Expect(current.Status.ProcessedItems).To(ContainElement(SatisfyAll(
-						HaveField("Status", metav1.ConditionFalse),
-						HaveField("Message", ContainSubstring("forbidden")),
-					)))
+					g.Expect(current.Status.Phase).To(Equal(capsulev1beta2.RequestPhaseFailed))
+					g.Expect(current.Status.Failure).NotTo(BeNil())
+					g.Expect(current.Status.Failure.Stage).To(Equal(capsulev1beta2.RequestFailureStagePreflight))
+					g.Expect(current.Status.Failure.RetryPhase).To(Equal(capsulev1beta2.RequestPhaseApproved))
+					g.Expect(current.Status.ProcessedItems).To(BeEmpty())
 				}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
 
 				cm := breakRequestManagedConfigMap(br.Namespace)
 				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(cm), cm)
 				Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
-				expireBreakRequestForCleanup(ctx, br)
+				By("granting the missing permissions and retrying as the requester")
+				grantBreakRequestServiceAccount(
+					breakRequestServiceAccountNamespace,
+					breakRequestReadOnlyServiceAccount,
+					[]string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				)
+				patchBreakRequestPhaseAs(
+					ctx,
+					requesterClient,
+					br,
+					capsulev1beta2.RequestPhaseRetrying,
+				)
+
+				Eventually(func(g Gomega) {
+					current := &capsulev1beta2.BreakRequest{}
+					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(br), current)).To(Succeed())
+					g.Expect(current.Status.Phase).To(Equal(capsulev1beta2.RequestPhaseActive))
+					g.Expect(current.Status.Failure).To(BeNil())
+					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cm), cm)).To(Succeed())
+				}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+
+				By("letting the requester expire the recovered request")
+				patchBreakRequestPhaseAs(
+					ctx,
+					requesterClient,
+					br,
+					capsulev1beta2.RequestPhaseExpired,
+				)
+				expectBreakRequestAndConfigMapDeleted(ctx, br, cm)
+			})
+
+			It("enters Failed when the ServiceAccount disappears after preflight and recovers on retry", func() {
+				grantBreakRequestServiceAccount(
+					breakRequestServiceAccountNamespace,
+					breakRequestReadOnlyServiceAccount,
+					[]string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				)
+
+				br := newImpersonatedBreakRequest("e2e-btg-activation-retry", brt.Name)
+				startTime := metav1.NewTime(time.Now().Add(20 * time.Second))
+				br.Spec.StartTime = &startTime
+				DeferCleanup(func() {
+					expireBreakRequestForCleanup(ctx, br)
+					EventuallyDeletion(br)
+				})
+				EventuallyCreation(func() error { return requesterClient.Create(ctx, br) }).Should(Succeed())
+
+				Eventually(func(g Gomega) {
+					current := &capsulev1beta2.BreakRequest{}
+					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(br), current)).To(Succeed())
+					g.Expect(current.Status.Phase).To(Equal(capsulev1beta2.RequestPhaseApproved))
+					ready := k8smeta.FindStatusCondition(current.Status.Conditions, apimeta.ReadyCondition)
+					g.Expect(ready).NotTo(BeNil())
+					g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+				}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+
+				By("deleting the resolved ServiceAccount after the successful preflight")
+				serviceAccount := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+					Name:      breakRequestReadOnlyServiceAccount,
+					Namespace: breakRequestServiceAccountNamespace,
+				}}
+				EventuallyDeletion(serviceAccount)
+
+				Eventually(func(g Gomega) {
+					current := &capsulev1beta2.BreakRequest{}
+					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(br), current)).To(Succeed())
+					g.Expect(current.Status.Phase).To(Equal(capsulev1beta2.RequestPhaseFailed))
+					g.Expect(current.Status.Failure).NotTo(BeNil())
+					g.Expect(current.Status.Failure.Stage).To(Equal(capsulev1beta2.RequestFailureStageActivation))
+					g.Expect(current.Status.Failure.RetryPhase).To(Equal(capsulev1beta2.RequestPhaseApproved))
+					ready := k8smeta.FindStatusCondition(current.Status.Conditions, apimeta.ReadyCondition)
+					g.Expect(ready).NotTo(BeNil())
+					g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+					g.Expect(ready.Reason).To(Equal("ImpersonationFailed"))
+					g.Expect(ready.Message).To(ContainSubstring("not found"))
+				}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+
+				By("recreating the ServiceAccount and retrying the stored approved snapshot")
+				grantBreakRequestServiceAccount(
+					breakRequestServiceAccountNamespace,
+					breakRequestReadOnlyServiceAccount,
+					[]string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				)
+				patchBreakRequestPhaseAs(
+					ctx,
+					requesterClient,
+					br,
+					capsulev1beta2.RequestPhaseRetrying,
+				)
+
+				cm := breakRequestManagedConfigMap(br.Namespace)
+				Eventually(func(g Gomega) {
+					current := &capsulev1beta2.BreakRequest{}
+					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(br), current)).To(Succeed())
+					g.Expect(current.Status.Phase).To(Equal(capsulev1beta2.RequestPhaseActive))
+					g.Expect(current.Status.Failure).To(BeNil())
+					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cm), cm)).To(Succeed())
+				}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+
+				patchBreakRequestPhaseAs(
+					ctx,
+					requesterClient,
+					br,
+					capsulev1beta2.RequestPhaseExpired,
+				)
 				expectBreakRequestAndConfigMapDeleted(ctx, br, cm)
 			})
 		})
@@ -388,10 +523,10 @@ data:
 					"default",
 					breakRequestLocalDefaultServiceAccount,
 				)
-				g.Expect(current.Status.Template).NotTo(BeNil())
-				g.Expect(current.Status.Template.Kind).To(Equal(capsulev1beta2.BreakRequestTemplateKind))
-				g.Expect(current.Status.Template.Name).To(Equal(brt.Name))
-				g.Expect(current.Status.Template.ResourceVersion).NotTo(BeEmpty())
+				g.Expect(current.Status.Request.Template).NotTo(BeNil())
+				g.Expect(current.Status.Request.Template.Kind).To(Equal(capsulev1beta2.BreakRequestTemplateKind))
+				g.Expect(current.Status.Request.Template.Name).To(Equal(brt.Name))
+				g.Expect(current.Status.Request.Template.ResourceVersion).NotTo(BeEmpty())
 
 				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cm), cm)).To(Succeed())
 				g.Expect(cm.Data).To(HaveKeyWithValue("source", "namespaced-template"))
@@ -481,9 +616,9 @@ func expectBreakRequestServiceAccount(
 	namespace,
 	name string,
 ) {
-	g.Expect(request.Status.ServiceAccount).ToNot(BeNil())
-	g.Expect(request.Status.ServiceAccount.Name.String()).To(Equal(name))
-	g.Expect(request.Status.ServiceAccount.Namespace.String()).To(Equal(namespace))
+	g.Expect(request.Status.Request.Impersonation).ToNot(BeNil())
+	g.Expect(request.Status.Request.Impersonation.Name.String()).To(Equal(name))
+	g.Expect(request.Status.Request.Impersonation.Namespace.String()).To(Equal(namespace))
 }
 
 func expectBreakRequestAndConfigMapDeleted(
@@ -498,5 +633,28 @@ func expectBreakRequestAndConfigMapDeleted(
 		current := &capsulev1beta2.BreakRequest{}
 		err = k8sClient.Get(ctx, client.ObjectKeyFromObject(request), current)
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+}
+
+func patchBreakRequestPhaseAs(
+	ctx context.Context,
+	actor client.Client,
+	request *capsulev1beta2.BreakRequest,
+	phase capsulev1beta2.RequestPhase,
+) {
+	Eventually(func() error {
+		current := &capsulev1beta2.BreakRequest{}
+		if err := actor.Get(ctx, client.ObjectKeyFromObject(request), current); err != nil {
+			return err
+		}
+
+		before := current.DeepCopy()
+		current.Status.Phase = phase
+
+		return actor.Status().Patch(
+			ctx,
+			current,
+			client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}),
+		)
 	}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
 }

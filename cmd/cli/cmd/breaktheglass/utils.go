@@ -28,7 +28,7 @@ import (
 
 func printBreakRequestsApprovalTable(
 	br *capsulev1beta2.BreakRequest,
-	app *capsulev1beta2.ApprovedProperties,
+	app *capsulev1beta2.BreakRequestStatusRequest,
 	color bool,
 ) {
 	t := table.NewWriter()
@@ -37,9 +37,9 @@ func printBreakRequestsApprovalTable(
 
 	t.Style().Title.Align = text.AlignCenter
 
-	approvedDurationStr := "Unlimited"
+	requestDurationStr := "Unlimited"
 	if app.Duration != nil && app.Duration.Duration != 0 {
-		approvedDurationStr = app.Duration.Duration.String()
+		requestDurationStr = app.Duration.Duration.String()
 	}
 
 	keepForStr := "Undefined"
@@ -61,7 +61,7 @@ func printBreakRequestsApprovalTable(
 		{"Name", colorizeValue(br.Name, color)},
 		{"Namespace", colorizeValue(br.Namespace, color)},
 		{"Duration", colorizeValue(effectiveDurationStr, color)},
-		{"ApprovedDuration", colorizeValue(approvedDurationStr, color)},
+		{"RequestDuration", colorizeValue(requestDurationStr, color)},
 		{"KeepFor", colorizeValue(keepForStr, color)},
 	})
 	t.Render()

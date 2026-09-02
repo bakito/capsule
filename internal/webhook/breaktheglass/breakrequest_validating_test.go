@@ -114,6 +114,50 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				expected: 0, // allowed
 			},
 			{
+				name: "deny parameters which do not match the template schema",
+				br: &capsulev1beta2.BreakRequest{
+					Spec: capsulev1beta2.BreakRequestSpec{
+						Template: templateRef(defaultTemplateName),
+						Params:   &runtime.RawExtension{Raw: []byte(`{"clusterRole":"admin:sad"}`)},
+					},
+				},
+				setup: func(reader *mc.MockReader) {
+					reader.EXPECT().
+						Get(gm.Any(), client.ObjectKey{Name: defaultTemplateName}, gm.Any()).
+						Do(func(_ any, _ any, brt *capsulev1beta2.GlobalBreakRequestTemplate, _ ...any) {
+							brt.Spec.ParamSchema = &runtime.RawExtension{Raw: []byte(`{
+								"type":"object",
+								"required":["clusterRole"],
+								"properties":{"clusterRole":{"type":"string","pattern":"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"}}
+							}`)}
+						})
+				},
+				expected: http.StatusForbidden,
+				errMsg:   "parameters for template foo are invalid",
+			},
+			{
+				name: "deny missing required template parameters",
+				br: &capsulev1beta2.BreakRequest{
+					Spec: capsulev1beta2.BreakRequestSpec{
+						Template: templateRef(defaultTemplateName),
+						Params:   &runtime.RawExtension{Raw: []byte(`{}`)},
+					},
+				},
+				setup: func(reader *mc.MockReader) {
+					reader.EXPECT().
+						Get(gm.Any(), client.ObjectKey{Name: defaultTemplateName}, gm.Any()).
+						Do(func(_ any, _ any, brt *capsulev1beta2.GlobalBreakRequestTemplate, _ ...any) {
+							brt.Spec.ParamSchema = &runtime.RawExtension{Raw: []byte(`{
+								"type":"object",
+								"required":["clusterRole"],
+								"properties":{"clusterRole":{"type":"string"}}
+							}`)}
+						})
+				},
+				expected: http.StatusForbidden,
+				errMsg:   "clusterRole in body is required",
+			},
+			{
 				name: "allow a namespace-local template",
 				br: &capsulev1beta2.BreakRequest{
 					ObjectMeta: metav1.ObjectMeta{Namespace: "team-a"},
@@ -333,7 +377,13 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				name:     "deny a request which has not entered a lifecycle phase",
 				br:       &capsulev1beta2.BreakRequest{},
 				expected: http.StatusForbidden,
-				errMsg:   "cannot be deleted before it has expired",
+				errMsg:   "cannot be deleted before it has expired (current phase: Initializing)",
+			},
+			{
+				name: "allow a created request",
+				br: &capsulev1beta2.BreakRequest{Status: capsulev1beta2.BreakRequestStatus{
+					Phase: capsulev1beta2.RequestPhaseCreated,
+				}},
 			},
 			{
 				name: "allow a requested request",
@@ -457,14 +507,14 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 			{
 				name: "deny changes to rendered resources by a reviewer",
 				oldBr: &capsulev1beta2.BreakRequest{
-					Status: capsulev1beta2.BreakRequestStatus{Approved: &capsulev1beta2.ApprovedProperties{
+					Status: capsulev1beta2.BreakRequestStatus{Request: &capsulev1beta2.BreakRequestStatusRequest{
 						Resources: []apiruntime.RenderedResource{{
 							Targets: []runtime.RawExtension{{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"original"}}`)}},
 						}},
 					}},
 				},
 				newBr: &capsulev1beta2.BreakRequest{
-					Status: capsulev1beta2.BreakRequestStatus{Approved: &capsulev1beta2.ApprovedProperties{
+					Status: capsulev1beta2.BreakRequestStatus{Request: &capsulev1beta2.BreakRequestStatusRequest{
 						Resources: []apiruntime.RenderedResource{{
 							Targets: []runtime.RawExtension{{Raw: []byte(`{"apiVersion":"v1","kind":"Secret","metadata":{"name":"injected"}}`)}},
 						}},
@@ -478,18 +528,18 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				name: "deny changes to resolved impersonation by a reviewer",
 				oldBr: &capsulev1beta2.BreakRequest{
 					Status: capsulev1beta2.BreakRequestStatus{
-						ServiceAccount: &capsulemeta.NamespacedRFC1123ObjectReferenceWithNamespace{
+						Request: &capsulev1beta2.BreakRequestStatusRequest{Impersonation: &capsulemeta.NamespacedRFC1123ObjectReferenceWithNamespace{
 							Name:      "template-runner",
 							Namespace: "operations",
-						},
+						}},
 					},
 				},
 				newBr: &capsulev1beta2.BreakRequest{
 					Status: capsulev1beta2.BreakRequestStatus{
-						ServiceAccount: &capsulemeta.NamespacedRFC1123ObjectReferenceWithNamespace{
+						Request: &capsulev1beta2.BreakRequestStatusRequest{Impersonation: &capsulemeta.NamespacedRFC1123ObjectReferenceWithNamespace{
 							Name:      "privileged-runner",
 							Namespace: "kube-system",
-						},
+						}},
 					},
 				},
 				request:  admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{SubResource: "status"}},
@@ -500,23 +550,39 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				name: "deny changes to resolved template by a reviewer",
 				oldBr: &capsulev1beta2.BreakRequest{
 					Status: capsulev1beta2.BreakRequestStatus{
-						Template: &capsulev1beta2.ResolvedBreakRequestTemplateReference{
+						Request: &capsulev1beta2.BreakRequestStatusRequest{Template: &capsulev1beta2.ResolvedBreakRequestTemplateReference{
 							BreakRequestTemplateReference: templateRef(defaultTemplateName),
 							ResourceVersion:               "1234",
-						},
+						}},
 					},
 				},
 				newBr: &capsulev1beta2.BreakRequest{
 					Status: capsulev1beta2.BreakRequestStatus{
-						Template: &capsulev1beta2.ResolvedBreakRequestTemplateReference{
+						Request: &capsulev1beta2.BreakRequestStatusRequest{Template: &capsulev1beta2.ResolvedBreakRequestTemplateReference{
 							BreakRequestTemplateReference: templateRef(defaultTemplateName),
 							ResourceVersion:               "5678",
-						},
+						}},
 					},
 				},
 				request:  admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{SubResource: "status"}},
 				expected: http.StatusForbidden,
 				errMsg:   "resolved template can only be changed by the Capsule controller",
+			},
+			{
+				name: "deny changes to resolved approvals by a reviewer",
+				oldBr: &capsulev1beta2.BreakRequest{Status: capsulev1beta2.BreakRequestStatus{
+					Request: &capsulev1beta2.BreakRequestStatusRequest{Approvals: &breaktheglass.ApprovalSpec{
+						Conditions: []string{"true"},
+					}},
+				}},
+				newBr: &capsulev1beta2.BreakRequest{Status: capsulev1beta2.BreakRequestStatus{
+					Request: &capsulev1beta2.BreakRequestStatusRequest{Approvals: &breaktheglass.ApprovalSpec{
+						Conditions: []string{"false"},
+					}},
+				}},
+				request:  admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{SubResource: "status"}},
+				expected: http.StatusForbidden,
+				errMsg:   "resolved approvals can only be changed by the Capsule controller",
 			},
 			{
 				name: "deny status changes without a lifecycle transition",
@@ -545,6 +611,7 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				oldBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
 						Conditions: []metav1.Condition{{
 							Type:    capsulemeta.ReadyCondition,
 							Status:  metav1.ConditionFalse,
@@ -556,8 +623,8 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				newBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
-						Approved: &capsulev1beta2.ApprovedProperties{},
-						Phase:    capsulev1beta2.RequestPhaseApproved,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
+						Phase:   capsulev1beta2.RequestPhaseApproved,
 					},
 				},
 				request:  admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{SubResource: "status"}},
@@ -569,7 +636,8 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				oldBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
-						Phase: capsulev1beta2.RequestPhaseRequested,
+						Phase:   capsulev1beta2.RequestPhaseRequested,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
 						Conditions: []metav1.Condition{{
 							Type:   capsulemeta.ReadyCondition,
 							Status: metav1.ConditionTrue,
@@ -579,8 +647,8 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				newBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
-						Phase:    capsulev1beta2.RequestPhaseApproved,
-						Approved: &capsulev1beta2.ApprovedProperties{},
+						Phase:   capsulev1beta2.RequestPhaseApproved,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
 						Conditions: []metav1.Condition{{
 							Type:   capsulemeta.ReadyCondition,
 							Status: metav1.ConditionTrue,
@@ -607,11 +675,55 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				expected: 0,
 			},
 			{
-				name: "deny approval when reviewer condition does not match",
+				name: "allow approval using the captured policy after the template changes",
 				oldBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
 						Phase: capsulev1beta2.RequestPhaseRequested,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{Approvals: &breaktheglass.ApprovalSpec{
+							Approvers:  rbac.UserListSpec{{Kind: rbac.UserOwner, Name: "alice"}},
+							Conditions: []string{"true"},
+						}},
+						Conditions: []metav1.Condition{{Type: capsulemeta.ReadyCondition, Status: metav1.ConditionTrue}},
+					},
+				},
+				newBr: &capsulev1beta2.BreakRequest{
+					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
+					Status: capsulev1beta2.BreakRequestStatus{
+						Phase: capsulev1beta2.RequestPhaseApproved,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{Approvals: &breaktheglass.ApprovalSpec{
+							Approvers:  rbac.UserListSpec{{Kind: rbac.UserOwner, Name: "alice"}},
+							Conditions: []string{"true"},
+						}},
+						Conditions: []metav1.Condition{{Type: capsulemeta.ReadyCondition, Status: metav1.ConditionTrue}},
+						Review: &capsulev1beta2.ReviewInfo{Reviewer: &breaktheglass.AccessEntity{
+							Name: "alice",
+							Type: breaktheglass.AccessEntityTypeUser,
+						}},
+					},
+				},
+				setup: func(reader *mc.MockReader) {
+					reader.EXPECT().Get(gm.Any(), client.ObjectKey{Name: defaultTemplateName}, gm.Any()).
+						Do(func(_ any, _ any, brt *capsulev1beta2.GlobalBreakRequestTemplate, _ ...any) {
+							brt.Spec.Approvals = breaktheglass.ApprovalSpec{
+								Approvers:  rbac.UserListSpec{{Kind: rbac.UserOwner, Name: "bob"}},
+								Conditions: []string{"false"},
+							}
+						})
+				},
+				request: admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+					SubResource: "status",
+					UserInfo:    authenticationv1.UserInfo{Username: "alice"},
+				}},
+				expected: 0,
+			},
+			{
+				name: "deny approval when reviewer condition does not match",
+				oldBr: &capsulev1beta2.BreakRequest{
+					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
+					Status: capsulev1beta2.BreakRequestStatus{
+						Phase:   capsulev1beta2.RequestPhaseRequested,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
 						Conditions: []metav1.Condition{{
 							Type:   capsulemeta.ReadyCondition,
 							Status: metav1.ConditionTrue,
@@ -621,8 +733,8 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				newBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
-						Phase:    capsulev1beta2.RequestPhaseApproved,
-						Approved: &capsulev1beta2.ApprovedProperties{},
+						Phase:   capsulev1beta2.RequestPhaseApproved,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
 						Conditions: []metav1.Condition{{
 							Type:   capsulemeta.ReadyCondition,
 							Status: metav1.ConditionTrue,
@@ -654,7 +766,8 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				oldBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
-						Phase: capsulev1beta2.RequestPhaseRequested,
+						Phase:   capsulev1beta2.RequestPhaseRequested,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
 						Conditions: []metav1.Condition{{
 							Type:   capsulemeta.ReadyCondition,
 							Status: metav1.ConditionTrue,
@@ -664,8 +777,8 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				newBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
-						Phase:    capsulev1beta2.RequestPhaseApproved,
-						Approved: &capsulev1beta2.ApprovedProperties{},
+						Phase:   capsulev1beta2.RequestPhaseApproved,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
 						Conditions: []metav1.Condition{{
 							Type:   capsulemeta.ReadyCondition,
 							Status: metav1.ConditionTrue,
@@ -702,7 +815,8 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				oldBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
-						Phase: capsulev1beta2.RequestPhaseRequested,
+						Phase:   capsulev1beta2.RequestPhaseRequested,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
 						Conditions: []metav1.Condition{{
 							Type:   capsulemeta.ReadyCondition,
 							Status: metav1.ConditionTrue,
@@ -712,8 +826,8 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 				newBr: &capsulev1beta2.BreakRequest{
 					Spec: capsulev1beta2.BreakRequestSpec{Template: templateRef(defaultTemplateName)},
 					Status: capsulev1beta2.BreakRequestStatus{
-						Phase:    capsulev1beta2.RequestPhaseApproved,
-						Approved: &capsulev1beta2.ApprovedProperties{},
+						Phase:   capsulev1beta2.RequestPhaseApproved,
+						Request: &capsulev1beta2.BreakRequestStatusRequest{},
 						Conditions: []metav1.Condition{{
 							Type:   capsulemeta.ReadyCondition,
 							Status: metav1.ConditionTrue,
@@ -770,7 +884,7 @@ func TestBreakRequestValidationHandler(t *testing.T) {
 	})
 }
 
-func TestBreakRequestValidationDefersRenderingToController(t *testing.T) {
+func TestBreakRequestValidationRejectsInvalidParametersBeforeRendering(t *testing.T) {
 	t.Parallel()
 
 	scheme := runtime.NewScheme()
@@ -801,16 +915,14 @@ func TestBreakRequestValidationDefersRenderingToController(t *testing.T) {
 				Kind: capsulev1beta2.GlobalBreakRequestTemplateKind,
 				Name: brt.Name,
 			},
-			// This is intentionally missing the required source parameter. Admission
-			// allows the object so the controller can report the rendering failure
-			// through status.conditions.
+			// This is intentionally missing the required source parameter. Parameter
+			// schemas are enforced before context loading or rendering can start.
 			Params: &runtime.RawExtension{Raw: []byte(`{}`)},
 		},
 	}
 	decoder := &test.Decoder[*capsulev1beta2.BreakRequest]{Object: br}
 	validator := BreakRequestValidationHandler(ctrl.Log.WithName("test"), nil)
 
-	if resp := validator.OnCreate(cl, cl, decoder, nil)(context.Background(), admission.Request{}); resp != nil {
-		t.Fatalf("expected rendering validation to be deferred to the controller, got %#v", resp)
-	}
+	resp := validator.OnCreate(cl, cl, decoder, nil)(context.Background(), admission.Request{})
+	test.VerifyResponse(t, resp, http.StatusForbidden, "source in body is required")
 }

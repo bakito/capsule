@@ -116,3 +116,33 @@ func TestGlobalBreakRequestTemplateApprovalCondition(t *testing.T) {
 		})
 	}
 }
+
+func TestBreakRequestUsesApprovalSnapshot(t *testing.T) {
+	t.Parallel()
+
+	template := &GlobalBreakRequestTemplate{Spec: GlobalBreakRequestTemplateSpec{
+		Approvals: breaktheglass.ApprovalSpec{Conditions: []string{"false"}},
+	}}
+	request := &BreakRequest{
+		Status: BreakRequestStatus{Request: &BreakRequestStatusRequest{
+			Approvals: &breaktheglass.ApprovalSpec{Conditions: []string{"true"}},
+		}},
+	}
+
+	matched, err := request.EvaluateApprovalConditions(context.Background(), template)
+	if err != nil {
+		t.Fatalf("EvaluateApprovalConditions() error = %v", err)
+	}
+	if !matched {
+		t.Fatal("EvaluateApprovalConditions() ignored the request approval snapshot")
+	}
+
+	request.Status.Request.Approvals = nil
+	matched, err = request.EvaluateApprovalConditions(context.Background(), template)
+	if err != nil {
+		t.Fatalf("legacy EvaluateApprovalConditions() error = %v", err)
+	}
+	if matched {
+		t.Fatal("EvaluateApprovalConditions() did not fall back to the template")
+	}
+}

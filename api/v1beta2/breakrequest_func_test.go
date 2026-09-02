@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/projectcapsule/capsule/pkg/api/breaktheglass"
+	apimeta "github.com/projectcapsule/capsule/pkg/api/meta"
 	apiruntime "github.com/projectcapsule/capsule/pkg/api/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,15 +26,15 @@ func TestOptionalBreakRequestFieldsAreOmitted(t *testing.T) {
 	}{
 		"status": {
 			value:  BreakRequestStatus{},
-			fields: []string{"review", "resources", "approved", "active", "keepUntil"},
+			fields: []string{"review", "resources", "request", "failure", "active", "keepUntil", "transitions"},
 		},
 		"active period": {
 			value:  ActivePeriod{},
 			fields: []string{"from", "until"},
 		},
-		"approved properties": {
-			value:  ApprovedProperties{},
-			fields: []string{"keepFor", "duration", "startTime", "resources"},
+		"request properties": {
+			value:  BreakRequestStatusRequest{},
+			fields: []string{"template", "impersonation", "approvals", "keepFor", "duration", "startTime", "resources"},
 		},
 	}
 
@@ -48,6 +49,163 @@ func TestOptionalBreakRequestFieldsAreOmitted(t *testing.T) {
 			require.NoError(t, json.Unmarshal(raw, &serialized))
 			for _, field := range testCase.fields {
 				assert.NotContains(t, serialized, field)
+			}
+		})
+	}
+}
+
+func TestTransitionAuditTrail(t *testing.T) {
+	t.Parallel()
+
+	requestor := &breaktheglass.AccessEntity{
+		Name:   "alice",
+		Type:   breaktheglass.AccessEntityTypeUser,
+		Groups: []string{"developers"},
+	}
+	createdAt := metav1.NewTime(time.Date(2026, time.September, 2, 8, 0, 0, 0, time.UTC))
+	br := &BreakRequest{ObjectMeta: metav1.ObjectMeta{CreationTimestamp: createdAt}}
+
+	require.NoError(t, br.SetCreated(requestor))
+	require.NoError(t, br.SetRequestedBy(requestor))
+	require.NoError(t, br.ApproveRequest(
+		&breaktheglass.AccessEntity{Type: breaktheglass.AccessEntityTypeSystem},
+		&BreakRequestStatusRequest{},
+		"Auto Approved",
+	))
+	require.NoError(t, br.ActiveRequest(nil))
+
+	require.Len(t, br.Status.Transitions, 4)
+	assert.Equal(t, RequestPhaseCreated, br.Status.Transitions[0].Type)
+	assert.Equal(t, requestor.Name, br.Status.Transitions[0].Actor.Name)
+	assert.Equal(t, requestor.Type, br.Status.Transitions[0].Actor.Type)
+	assert.Equal(t, createdAt, br.Status.Transitions[0].Timestamp)
+	actorJSON, err := json.Marshal(br.Status.Transitions[0].Actor)
+	require.NoError(t, err)
+	assert.NotContains(t, string(actorJSON), "groups")
+	assert.Equal(t, RequestPhaseRequested, br.Status.Transitions[1].Type)
+	assert.Equal(t, requestor.Name, br.Status.Transitions[1].Actor.Name)
+	assert.Equal(t, requestor.Type, br.Status.Transitions[1].Actor.Type)
+	assert.Equal(t, RequestPhaseApproved, br.Status.Transitions[2].Type)
+	assert.Equal(t, BreakRequestTransitionActor{
+		Name: capsuleControllerActorName,
+		Type: breaktheglass.AccessEntityTypeSystem,
+	}, br.Status.Transitions[2].Actor)
+	assert.Equal(t, RequestPhaseActive, br.Status.Transitions[3].Type)
+	assert.Empty(t, br.Status.Conditions)
+}
+
+func TestBreakRequestResolvedDataIsNestedUnderRequest(t *testing.T) {
+	t.Parallel()
+
+	status := BreakRequestStatus{Request: &BreakRequestStatusRequest{
+		Template: &ResolvedBreakRequestTemplateReference{
+			BreakRequestTemplateReference: BreakRequestTemplateReference{
+				Kind: GlobalBreakRequestTemplateKind,
+				Name: "emergency-access",
+			},
+			ResourceVersion: "42",
+		},
+		Impersonation: &apimeta.NamespacedRFC1123ObjectReferenceWithNamespace{
+			Name:      "runner",
+			Namespace: "capsule-system",
+		},
+	}}
+
+	raw, err := json.Marshal(status)
+	require.NoError(t, err)
+
+	serialized := map[string]any{}
+	require.NoError(t, json.Unmarshal(raw, &serialized))
+	assert.NotContains(t, serialized, "approved")
+	assert.NotContains(t, serialized, "template")
+	assert.NotContains(t, serialized, "serviceAccount")
+
+	request, ok := serialized["request"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, request, "template")
+	assert.Contains(t, request, "impersonation")
+}
+
+func TestBreakRequestFailureRetryLifecycle(t *testing.T) {
+	t.Parallel()
+
+	requestor := &breaktheglass.AccessEntity{Name: "alice", Type: breaktheglass.AccessEntityTypeUser}
+	br := &BreakRequest{Status: BreakRequestStatus{
+		Phase:   RequestPhaseApproved,
+		Request: &BreakRequestStatusRequest{},
+		Review: &ReviewInfo{
+			Reviewer: requestor,
+			Verdict:  RequestVerdictApproved,
+		},
+	}}
+
+	require.NoError(t, br.FailRequest(
+		RequestFailureStageActivation,
+		RequestPhaseApproved,
+		"ResourceApplyFailed",
+		"configmaps is forbidden",
+	))
+	assert.Equal(t, RequestPhaseFailed, br.Status.Phase)
+	require.NotNil(t, br.Status.Failure)
+	assert.Equal(t, RequestFailureStageActivation, br.Status.Failure.Stage)
+
+	require.NoError(t, br.RetryRequest(requestor))
+	assert.Equal(t, RequestPhaseRetrying, br.Status.Phase)
+	require.NoError(t, br.CompleteRetry())
+	assert.Equal(t, RequestPhaseApproved, br.Status.Phase)
+	assert.Nil(t, br.Status.Failure)
+	assert.Equal(t, requestor, br.Status.Review.Reviewer)
+
+	require.Len(t, br.Status.Transitions, 3)
+	assert.Equal(t, RequestPhaseFailed, br.Status.Transitions[0].Type)
+	assert.Equal(t, RequestPhaseRetrying, br.Status.Transitions[1].Type)
+	assert.Equal(t, RequestPhaseApproved, br.Status.Transitions[2].Type)
+	assert.Equal(t, requestor.Name, br.Status.Transitions[1].Actor.Name)
+	assert.Equal(t, requestor.Type, br.Status.Transitions[1].Actor.Type)
+}
+
+func TestExpireRequestTracksActor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		entity      *breaktheglass.AccessEntity
+		wantReason  string
+		wantMessage string
+	}{
+		{
+			name:        "automatic expiration",
+			wantReason:  "ExpiredBySystem",
+			wantMessage: "Access request expired automatically",
+		},
+		{
+			name: "user expiration",
+			entity: &breaktheglass.AccessEntity{
+				Name: "alice",
+				Type: breaktheglass.AccessEntityTypeUser,
+			},
+			wantReason:  "ExpiredByUser",
+			wantMessage: "Access request expired by alice",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			br := &BreakRequest{Status: BreakRequestStatus{Phase: RequestPhaseActive}}
+			require.NoError(t, br.ExpireRequest(testCase.entity))
+
+			transition := br.LatestTransition(RequestPhaseExpired)
+			require.NotNil(t, transition)
+			assert.Equal(t, testCase.wantReason, transition.Reason)
+			assert.Equal(t, testCase.wantMessage, transition.Message)
+			if testCase.entity == nil {
+				assert.Equal(t, breaktheglass.AccessEntityTypeSystem, transition.Actor.Type)
+				assert.Equal(t, capsuleControllerActorName, transition.Actor.Name)
+			} else {
+				assert.Equal(t, testCase.entity.Name, transition.Actor.Name)
+				assert.Equal(t, testCase.entity.Type, transition.Actor.Type)
 			}
 		})
 	}
@@ -103,6 +261,12 @@ func TestTransitionRequestPhase(t *testing.T) {
 		expectError bool
 	}{
 		{
+			name:        "create an uninitialized request",
+			phase:       RequestPhaseCreated,
+			initPhase:   "",
+			expectError: false,
+		},
+		{
 			name:        "valid transition",
 			phase:       RequestPhaseRequested,
 			initPhase:   "",
@@ -145,15 +309,15 @@ func TestTransitionRequestPhase(t *testing.T) {
 func TestApproveRequest(t *testing.T) {
 	br := &BreakRequest{}
 	entity := &breaktheglass.AccessEntity{Name: "reviewer", Type: breaktheglass.AccessEntityTypeUser}
-	props := &ApprovedProperties{Duration: &metav1.Duration{Duration: time.Hour}}
+	props := &BreakRequestStatusRequest{Duration: &metav1.Duration{Duration: time.Hour}}
 	err := br.ApproveRequest(entity, props, "Approved")
 	require.NoError(t, err)
 	assert.Equal(t, RequestPhaseApproved, br.Status.Phase)
 	assert.Equal(t, entity, br.Status.Review.Reviewer)
-	assert.Equal(t, props.Duration, br.Status.Approved.Duration)
+	assert.Equal(t, props.Duration, br.Status.Request.Duration)
 }
 
-func TestGenerateApprovedPropertiesResolvesLifecycleDefaults(t *testing.T) {
+func TestGenerateRequestStatusResolvesLifecycleDefaults(t *testing.T) {
 	keepFor := breaktheglass.ExtendedDuration(5 * time.Minute)
 	resources := []apiruntime.RenderedResource{{
 		Targets: []runtime.RawExtension{{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap"}`)}},
@@ -162,12 +326,16 @@ func TestGenerateApprovedPropertiesResolvesLifecycleDefaults(t *testing.T) {
 		DefaultDuration: &metav1.Duration{Duration: time.Minute},
 		MaxDuration:     &metav1.Duration{Duration: time.Hour},
 		KeepFor:         &keepFor,
+		Approvals: breaktheglass.ApprovalSpec{
+			Auto:       true,
+			Conditions: []string{"true"},
+		},
 	}}
-	br := &BreakRequest{Status: BreakRequestStatus{Approved: &ApprovedProperties{
+	br := &BreakRequest{Status: BreakRequestStatus{Request: &BreakRequestStatusRequest{
 		Resources: resources,
 	}}}
 
-	properties, err := br.GenerateApprovedProperties(brt)
+	properties, err := br.GenerateRequestStatus(brt)
 	require.NoError(t, err)
 	require.NotNil(t, properties.Duration)
 	assert.Equal(t, time.Minute, properties.Duration.Duration)
@@ -176,9 +344,13 @@ func TestGenerateApprovedPropertiesResolvesLifecycleDefaults(t *testing.T) {
 	require.NotNil(t, properties.StartTime)
 	assert.Equal(t, resources, properties.Resources)
 	require.NotSame(t, &resources[0], &properties.Resources[0])
+	require.NotNil(t, properties.Approvals)
+	assert.Equal(t, brt.Spec.Approvals, *properties.Approvals)
+	brt.Spec.Approvals.Conditions[0] = "false"
+	assert.Equal(t, "true", properties.Approvals.Conditions[0])
 
 	br.Spec.Duration = &metav1.Duration{Duration: 2 * time.Hour}
-	_, err = br.GenerateApprovedProperties(brt)
+	_, err = br.GenerateRequestStatus(brt)
 	require.ErrorContains(t, err, "exceeds template maxDuration")
 }
 
@@ -233,7 +405,7 @@ func TestActiveRequest(t *testing.T) {
 			name: "activate with approved duration",
 			br: &BreakRequest{
 				Status: BreakRequestStatus{
-					Approved: &ApprovedProperties{
+					Request: &BreakRequestStatusRequest{
 						Duration: &metav1.Duration{Duration: 30 * time.Minute},
 					},
 					Phase: RequestPhaseApproved,
@@ -250,7 +422,7 @@ func TestActiveRequest(t *testing.T) {
 			br: &BreakRequest{
 				Spec: BreakRequestSpec{Duration: &metav1.Duration{Duration: time.Minute}},
 				Status: BreakRequestStatus{
-					Approved: &ApprovedProperties{
+					Request: &BreakRequestStatusRequest{
 						Duration: nil,
 					},
 					Phase: RequestPhaseApproved,
@@ -263,11 +435,11 @@ func TestActiveRequest(t *testing.T) {
 			expectActiveUntil:  true,
 		},
 		{
-			name: "activate without approved properties",
+			name: "activate without request properties",
 			br: &BreakRequest{
 				Status: BreakRequestStatus{
-					Approved: nil,
-					Phase:    RequestPhaseApproved,
+					Request: nil,
+					Phase:   RequestPhaseApproved,
 				},
 			},
 			entity:             &breaktheglass.AccessEntity{Name: "user", Type: breaktheglass.AccessEntityTypeUser},
@@ -280,7 +452,7 @@ func TestActiveRequest(t *testing.T) {
 			name: "activate with nil entity",
 			br: &BreakRequest{
 				Status: BreakRequestStatus{
-					Approved: &ApprovedProperties{
+					Request: &BreakRequestStatusRequest{
 						Duration: &metav1.Duration{Duration: 30 * time.Minute},
 					},
 					Phase: RequestPhaseApproved,

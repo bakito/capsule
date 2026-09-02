@@ -75,6 +75,32 @@ func (brt *BreakRequestTemplate) EvaluateApprovalConditions(
 	return evaluateApprovalConditions(ctx, br, brt.Spec.Approvals)
 }
 
+// ApprovalPolicy returns the immutable policy captured with the rendered
+// request. The template is only a compatibility fallback for requests created
+// before approval snapshots were introduced.
+func (br *BreakRequest) ApprovalPolicy(fallback BreakRequestTemplateSource) breaktheglass.ApprovalSpec {
+	if br.Status.Request != nil && br.Status.Request.Approvals != nil {
+		return *br.Status.Request.Approvals.DeepCopy()
+	}
+
+	if fallback != nil {
+		approvals := fallback.TemplateData().Approvals
+
+		return *approvals.DeepCopy()
+	}
+
+	return breaktheglass.ApprovalSpec{}
+}
+
+// EvaluateApprovalConditions evaluates the approval policy captured with the
+// request, falling back to the supplied template for legacy requests.
+func (br *BreakRequest) EvaluateApprovalConditions(
+	ctx context.Context,
+	fallback BreakRequestTemplateSource,
+) (bool, error) {
+	return evaluateApprovalConditions(ctx, br, br.ApprovalPolicy(fallback))
+}
+
 func evaluateApprovalConditions(
 	ctx context.Context,
 	br *BreakRequest,
@@ -166,6 +192,15 @@ func (brt *GlobalBreakRequestTemplate) CheckApprovalConditions(ctx context.Conte
 // CheckApprovalConditions checks a namespaced template's approval gate.
 func (brt *BreakRequestTemplate) CheckApprovalConditions(ctx context.Context, br *BreakRequest) error {
 	return checkApprovalConditions(ctx, br, brt.Spec.Approvals)
+}
+
+// CheckApprovalConditions checks the approval policy captured with the
+// request, falling back to the supplied template for legacy requests.
+func (br *BreakRequest) CheckApprovalConditions(
+	ctx context.Context,
+	fallback BreakRequestTemplateSource,
+) error {
+	return checkApprovalConditions(ctx, br, br.ApprovalPolicy(fallback))
 }
 
 func checkApprovalConditions(

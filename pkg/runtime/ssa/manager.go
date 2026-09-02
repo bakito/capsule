@@ -47,6 +47,7 @@ type ApplyOptions struct {
 	Force             bool
 	Adopt             bool
 	Protect           bool
+	DryRun            bool
 	OwnerReference    *metav1.OwnerReference
 	PreviouslyCreated bool
 }
@@ -124,11 +125,19 @@ func (m Manager) Apply(
 		retry.DefaultBackoff,
 		apierrors.IsConflict,
 		func() error {
-			return clt.PatchApply(ctx, c, desired, opts.FieldOwner, opts.Force)
+			return clt.PatchApply(ctx, c, desired, opts.FieldOwner, opts.Force, opts.DryRun)
 		},
 	)
 	if err != nil {
 		return ApplyResult{Created: created}, fmt.Errorf("applying object failed: %w", err)
+	}
+
+	// A server-side dry-run exercises discovery, authorization, admission,
+	// schema validation, adoption, and SSA conflicts without persisting the
+	// desired object. There is consequently no actual object or managed-fields
+	// timestamp to read or decorate afterwards.
+	if opts.DryRun {
+		return ApplyResult{Created: created}, nil
 	}
 
 	err = retry.OnError(
@@ -210,7 +219,7 @@ func (m Manager) Prune(
 	// Applying only the resource identity causes SSA to remove every field
 	// previously owned by this manager while preserving other managers' fields.
 	prunePatch := objectReference(actual)
-	if err := clt.PatchApply(ctx, c, prunePatch, opts.FieldOwner, false); err != nil {
+	if err := clt.PatchApply(ctx, c, prunePatch, opts.FieldOwner, false, false); err != nil {
 		if apierrors.IsNotFound(err) {
 			return true, nil
 		}

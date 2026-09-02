@@ -20,7 +20,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	k8smeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -111,10 +110,10 @@ var _ = Describe("creating a GlobalBreakRequestTemplate", Ordered, Label("break-
 			current := &capsulev1beta2.BreakRequest{}
 			Eventually(func(g Gomega) {
 				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: br.Name, Namespace: br.Namespace}, current)).To(Succeed())
-				g.Expect(current.Status.Template).NotTo(BeNil())
-				g.Expect(current.Status.Template.Kind).To(Equal(capsulev1beta2.GlobalBreakRequestTemplateKind))
-				g.Expect(current.Status.Template.Name).To(Equal(brt.Name))
-				g.Expect(current.Status.Template.ResourceVersion).NotTo(BeEmpty())
+				g.Expect(current.Status.Request.Template).NotTo(BeNil())
+				g.Expect(current.Status.Request.Template.Kind).To(Equal(capsulev1beta2.GlobalBreakRequestTemplateKind))
+				g.Expect(current.Status.Request.Template.Name).To(Equal(brt.Name))
+				g.Expect(current.Status.Request.Template.ResourceVersion).NotTo(BeEmpty())
 			}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
 
 			cm := &corev1.ConfigMap{}
@@ -487,7 +486,7 @@ var _ = Describe("creating a GlobalBreakRequestTemplate", Ordered, Label("break-
 				g.Expect(requested.Status.Phase).To(Equal(capsulev1beta2.RequestPhaseRequested))
 			}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
 
-			properties, err := requested.GenerateApprovedProperties()
+			properties, err := requested.GenerateRequestStatus()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(requested.ApproveRequest(&breaktheglass.AccessEntity{Name: "spoofed"}, properties, "")).To(Succeed())
 			err = bobClient.Status().Update(ctx, requested)
@@ -497,7 +496,7 @@ var _ = Describe("creating a GlobalBreakRequestTemplate", Ordered, Label("break-
 			charlieClient := impersonationClient("charlie", []string{"users", "admin"})
 			requested = &capsulev1beta2.BreakRequest{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: br.Name, Namespace: br.Namespace}, requested)).To(Succeed())
-			properties, err = requested.GenerateApprovedProperties()
+			properties, err = requested.GenerateRequestStatus()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(requested.ApproveRequest(&breaktheglass.AccessEntity{Name: "spoofed"}, properties, "")).To(Succeed())
 			Expect(charlieClient.Status().Update(ctx, requested)).To(Succeed())
@@ -534,7 +533,7 @@ var _ = Describe("creating a GlobalBreakRequestTemplate", Ordered, Label("break-
 					g.Expect(requested.Status.Phase).To(Equal(capsulev1beta2.RequestPhaseRequested))
 				}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
 
-				properties, err := requested.GenerateApprovedProperties()
+				properties, err := requested.GenerateRequestStatus()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(requested.ApproveRequest(&breaktheglass.AccessEntity{Name: "spoofed"}, properties, "")).To(Succeed())
 				err = impersonationClient("alice", []string{"developers"}).Status().Update(ctx, requested)
@@ -542,7 +541,7 @@ var _ = Describe("creating a GlobalBreakRequestTemplate", Ordered, Label("break-
 
 				requested = &capsulev1beta2.BreakRequest{}
 				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: br.Name, Namespace: br.Namespace}, requested)).To(Succeed())
-				properties, err = requested.GenerateApprovedProperties()
+				properties, err = requested.GenerateRequestStatus()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(requested.ApproveRequest(&breaktheglass.AccessEntity{Name: "spoofed"}, properties, "")).To(Succeed())
 				Expect(impersonationClient("bob", []string{"developers", "on-call"}).Status().Update(ctx, requested)).To(Succeed())
@@ -661,7 +660,11 @@ var _ = Describe("creating a GlobalBreakRequestTemplate", Ordered, Label("break-
 					}}},
 				},
 			}
-			brt.Spec.ParamSchema = &runtime.RawExtension{Raw: []byte(`{"type": "object", "required": ["value"], "properties": {"value": {"type": "string"}}}`)}
+			brt.Spec.ParamSchema = &runtime.RawExtension{Raw: []byte(`{
+				"type":"object",
+				"required":["value"],
+				"properties":{"value":{"type":"string","pattern":"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}}
+			}`)}
 		})
 		It("should create correct a ConfigMap data", func() {
 			br := &capsulev1beta2.BreakRequest{
@@ -691,7 +694,7 @@ var _ = Describe("creating a GlobalBreakRequestTemplate", Ordered, Label("break-
 			Expect(cm.Data["key"]).Should(Equal("test-value"))
 		})
 
-		It("reports parameter rendering failures in status", func() {
+		It("rejects invalid parameters at admission", func() {
 			br := &capsulev1beta2.BreakRequest{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "e2e-btg-invalid-params",
@@ -699,33 +702,12 @@ var _ = Describe("creating a GlobalBreakRequestTemplate", Ordered, Label("break-
 				},
 				Spec: capsulev1beta2.BreakRequestSpec{
 					Template: globalBreakRequestTemplateReference(brt.GetName()),
-					Params:   &runtime.RawExtension{Raw: []byte(`{}`)},
+					Params:   &runtime.RawExtension{Raw: []byte(`{"value":"admin:sad"}`)},
 				},
 			}
-			defer func() {
-				expireBreakRequestForCleanup(ctx, br)
-				EventuallyDeletion(br)
-			}()
-
-			EventuallyCreation(func() error {
-				return k8sClient.Create(ctx, br)
-			}).Should(Succeed())
-
-			Eventually(func(g Gomega) {
-				current := &capsulev1beta2.BreakRequest{}
-				g.Expect(k8sClient.Get(ctx, types.NamespacedName{
-					Name: br.Name, Namespace: br.Namespace,
-				}, current)).To(Succeed())
-
-				ready := k8smeta.FindStatusCondition(current.Status.Conditions, apimeta.ReadyCondition)
-				g.Expect(ready).NotTo(BeNil())
-				g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-				g.Expect(ready.Reason).To(Equal("TemplateRenderingFailed"))
-				g.Expect(ready.Message).To(ContainSubstring("invalid params"))
-				g.Expect(current.Status.Phase).To(BeEmpty())
-				g.Expect(current.Status.Approved).NotTo(BeNil())
-				g.Expect(current.Status.Approved.Resources).To(BeEmpty())
-			}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+			err := k8sClient.Create(ctx, br)
+			Expect(apierrors.IsForbidden(err)).To(BeTrue())
+			Expect(err).To(MatchError(ContainSubstring("value in body should match")))
 		})
 	})
 
@@ -925,7 +907,7 @@ func approveBreakRequest(ctx context.Context, br *capsulev1beta2.BreakRequest) {
 		}
 		return nil
 	}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
-	Expect(br2.Status.Approved).ShouldNot(BeNil())
+	Expect(br2.Status.Request).ShouldNot(BeNil())
 
 	before := br2.DeepCopy()
 	br2.Status.Phase = capsulev1beta2.RequestPhaseApproved

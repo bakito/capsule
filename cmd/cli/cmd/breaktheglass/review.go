@@ -81,11 +81,11 @@ var reviewCmd = &cobra.Command{
 			)
 		}
 
-		if br.Status.Approved == nil {
-			return fmt.Errorf("BreakRequest %s has no prepared approval properties", name)
+		if br.Status.Request == nil {
+			return fmt.Errorf("BreakRequest %s has no prepared request properties", name)
 		}
 
-		props := br.Status.Approved.DeepCopy()
+		props := br.Status.Request.DeepCopy()
 
 		// Parse Flags and Overwrite
 		if keepForStr != "" {
@@ -167,7 +167,7 @@ var reviewCmd = &cobra.Command{
 					switch action {
 					case approveValue:
 						br.Status.Phase = v1beta2.RequestPhaseApproved
-						br.Status.Approved = props.DeepCopy()
+						br.Status.Request = props.DeepCopy()
 					case denyValue:
 						br.Status.Phase = v1beta2.RequestPhaseDenied
 					default:

@@ -67,6 +67,7 @@ func (brt *BreakRequestTemplate) TemplateData() BreakRequestTemplateData {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=brt
 // +kubebuilder:printcolumn:name="AutoApprove",type=boolean,JSONPath=`.spec.approvals.auto`
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Age"
 
 // BreakRequestTemplate is the Schema for namespaced BreakRequest templates.
 type BreakRequestTemplate struct {

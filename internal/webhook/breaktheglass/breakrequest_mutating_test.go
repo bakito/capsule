@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
-	k8smeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -158,8 +157,8 @@ func TestBreakRequestMutationHandlerOnApproval(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			oldBr := &capsulev1beta2.BreakRequest{Status: capsulev1beta2.BreakRequestStatus{
-				Phase:    capsulev1beta2.RequestPhaseRequested,
-				Approved: &capsulev1beta2.ApprovedProperties{},
+				Phase:   capsulev1beta2.RequestPhaseRequested,
+				Request: &capsulev1beta2.BreakRequestStatusRequest{},
 			}}
 			var review *capsulev1beta2.ReviewInfo
 			if tt.reviewer != nil {
@@ -167,9 +166,9 @@ func TestBreakRequestMutationHandlerOnApproval(t *testing.T) {
 			}
 
 			newBr := &capsulev1beta2.BreakRequest{Status: capsulev1beta2.BreakRequestStatus{
-				Phase:    capsulev1beta2.RequestPhaseApproved,
-				Review:   review,
-				Approved: &capsulev1beta2.ApprovedProperties{},
+				Phase:   capsulev1beta2.RequestPhaseApproved,
+				Review:  review,
+				Request: &capsulev1beta2.BreakRequestStatusRequest{},
 			}}
 			raw, err := json.Marshal(newBr)
 			require.NoError(t, err)
@@ -263,12 +262,12 @@ func TestBreakRequestMutationHandlerAppliesApprovalFromPhaseOnly(t *testing.T) {
 		}},
 		Status: capsulev1beta2.BreakRequestStatus{
 			Phase: capsulev1beta2.RequestPhaseRequested,
-			Approved: &capsulev1beta2.ApprovedProperties{
-				Duration:  duration,
-				Resources: resources,
+			Request: &capsulev1beta2.BreakRequestStatusRequest{
+				Duration:      duration,
+				Resources:     resources,
+				Impersonation: serviceAccount,
+				Template:      template,
 			},
-			ServiceAccount: serviceAccount,
-			Template:       template,
 		},
 	}
 	newBr := &capsulev1beta2.BreakRequest{
@@ -300,22 +299,20 @@ func TestBreakRequestMutationHandlerAppliesApprovalFromPhaseOnly(t *testing.T) {
 
 	mutated := applyResponsePatches(t, raw, resp)
 	assert.Equal(t, capsulev1beta2.RequestPhaseApproved, mutated.Status.Phase)
-	assert.Equal(t, resources, mutated.Status.Approved.Resources)
-	assert.Equal(t, duration, mutated.Status.Approved.Duration)
-	assert.Equal(t, serviceAccount, mutated.Status.ServiceAccount)
-	assert.Equal(t, template, mutated.Status.Template)
+	assert.Equal(t, resources, mutated.Status.Request.Resources)
+	assert.Equal(t, duration, mutated.Status.Request.Duration)
+	assert.Equal(t, serviceAccount, mutated.Status.Request.Impersonation)
+	assert.Equal(t, template, mutated.Status.Request.Template)
 	require.NotNil(t, mutated.Status.Review)
 	require.NotNil(t, mutated.Status.Review.Reviewer)
 	assert.Equal(t, "alice", mutated.Status.Review.Reviewer.Name)
 	assert.Equal(t, capsulev1beta2.RequestVerdictApproved, mutated.Status.Review.Verdict)
-	approved := k8smeta.FindStatusCondition(
-		mutated.Status.Conditions,
-		string(capsulev1beta2.RequestPhaseApproved),
-	)
+	approved := mutated.LatestTransition(capsulev1beta2.RequestPhaseApproved)
 	require.NotNil(t, approved)
-	assert.Equal(t, metav1.ConditionTrue, approved.Status)
 	assert.Equal(t, "ApprovedByUser", approved.Reason)
 	assert.Equal(t, "Access request approved", approved.Message)
+	assert.Equal(t, "alice", approved.Actor.Name)
+	assert.Equal(t, capsulev1beta2.RequestPhaseApproved, approved.Type)
 }
 
 func TestBreakRequestMutationHandlerAppliesExpirationFromStoredStatus(t *testing.T) {
@@ -338,12 +335,12 @@ func TestBreakRequestMutationHandlerAppliesExpirationFromStoredStatus(t *testing
 	}
 	oldBr := &capsulev1beta2.BreakRequest{Status: capsulev1beta2.BreakRequestStatus{
 		Phase: capsulev1beta2.RequestPhaseActive,
-		Approved: &capsulev1beta2.ApprovedProperties{
-			KeepFor:   &keepFor,
-			Resources: resources,
+		Request: &capsulev1beta2.BreakRequestStatusRequest{
+			KeepFor:       &keepFor,
+			Resources:     resources,
+			Impersonation: serviceAccount,
+			Template:      template,
 		},
-		ServiceAccount: serviceAccount,
-		Template:       template,
 		Active: &capsulev1beta2.ActivePeriod{
 			ActiveFrom: ptrTo(metav1.Now()),
 		},
@@ -371,11 +368,17 @@ func TestBreakRequestMutationHandlerAppliesExpirationFromStoredStatus(t *testing
 
 	mutated := applyResponsePatches(t, raw, resp)
 	assert.Equal(t, capsulev1beta2.RequestPhaseExpired, mutated.Status.Phase)
-	assert.Equal(t, resources, mutated.Status.Approved.Resources)
-	assert.Equal(t, serviceAccount, mutated.Status.ServiceAccount)
-	assert.Equal(t, template, mutated.Status.Template)
+	assert.Equal(t, resources, mutated.Status.Request.Resources)
+	assert.Equal(t, serviceAccount, mutated.Status.Request.Impersonation)
+	assert.Equal(t, template, mutated.Status.Request.Template)
 	require.NotNil(t, mutated.Status.KeepUntil)
 	assert.True(t, mutated.Status.KeepUntil.After(time.Now()))
+	expired := mutated.LatestTransition(capsulev1beta2.RequestPhaseExpired)
+	require.NotNil(t, expired)
+	assert.Equal(t, "ExpiredByUser", expired.Reason)
+	assert.Equal(t, "Access request expired by alice", expired.Message)
+	assert.Equal(t, "alice", expired.Actor.Name)
+	assert.Equal(t, capsulev1beta2.RequestPhaseExpired, expired.Type)
 
 	// Validating admission receives the object after mutation. The reconstructed
 	// status must therefore pass the controller-owned resource and impersonation
@@ -393,12 +396,65 @@ func TestBreakRequestMutationHandlerAppliesExpirationFromStoredStatus(t *testing
 	assert.Nil(t, validationResponse)
 }
 
+func TestBreakRequestMutationHandlerAppliesRequesterRetryFromStoredFailure(t *testing.T) {
+	t.Parallel()
+
+	resources := []apiruntime.RenderedResource{{Targets: []runtime.RawExtension{{Raw: []byte(
+		`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"target"}}`,
+	)}}}}
+	oldBr := &capsulev1beta2.BreakRequest{
+		Spec: capsulev1beta2.BreakRequestSpec{Requestor: breaktheglassapi.AccessEntity{
+			Name: "alice",
+			Type: breaktheglassapi.AccessEntityTypeUser,
+		}},
+		Status: capsulev1beta2.BreakRequestStatus{
+			Phase: capsulev1beta2.RequestPhaseFailed,
+			Failure: &capsulev1beta2.BreakRequestFailure{
+				Stage:      capsulev1beta2.RequestFailureStagePreflight,
+				RetryPhase: capsulev1beta2.RequestPhaseRequested,
+				Reason:     "ResourceDryRunFailed",
+				Message:    "configmaps is forbidden",
+			},
+			Request: &capsulev1beta2.BreakRequestStatusRequest{Resources: resources},
+		},
+	}
+	newBr := oldBr.DeepCopy()
+	newBr.Status = capsulev1beta2.BreakRequestStatus{Phase: capsulev1beta2.RequestPhaseRetrying}
+	raw, err := json.Marshal(newBr)
+	require.NoError(t, err)
+
+	decoder := &test.Decoder[*capsulev1beta2.BreakRequest]{Object: newBr, OldObject: oldBr}
+	req := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Object:      runtime.RawExtension{Raw: raw},
+		OldObject:   runtime.RawExtension{Raw: []byte(`{}`)},
+		SubResource: "status",
+		UserInfo: authenticationv1.UserInfo{
+			Username: "alice",
+			Groups:   []string{"system:authenticated"},
+		},
+	}}
+
+	resp := BreakRequestMutationHandler(log.Log.WithName("test")).OnUpdate(nil, nil, decoder, nil)(context.Background(), req)
+	require.NotNil(t, resp)
+	assert.True(t, resp.Allowed)
+
+	mutated := applyResponsePatches(t, raw, resp)
+	assert.Equal(t, capsulev1beta2.RequestPhaseRetrying, mutated.Status.Phase)
+	assert.Equal(t, oldBr.Status.Failure, mutated.Status.Failure)
+	assert.Equal(t, resources, mutated.Status.Request.Resources)
+	retryTransition := mutated.LatestTransition(capsulev1beta2.RequestPhaseRetrying)
+	require.NotNil(t, retryTransition)
+	assert.Equal(t, "RetryRequestedByUser", retryTransition.Reason)
+	assert.Contains(t, retryTransition.Message, "alice")
+	assert.Equal(t, "alice", retryTransition.Actor.Name)
+}
+
 func TestBreakRequestMutationHandlerRejectsInvalidTransition(t *testing.T) {
 	t.Parallel()
 
 	oldBr := &capsulev1beta2.BreakRequest{Status: capsulev1beta2.BreakRequestStatus{
-		Phase:    capsulev1beta2.RequestPhaseRequested,
-		Approved: &capsulev1beta2.ApprovedProperties{},
+		Phase:   capsulev1beta2.RequestPhaseRequested,
+		Request: &capsulev1beta2.BreakRequestStatusRequest{},
 	}}
 	newBr := oldBr.DeepCopy()
 	newBr.Status.Phase = capsulev1beta2.RequestPhaseActive

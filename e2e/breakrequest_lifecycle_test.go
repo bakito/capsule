@@ -15,6 +15,7 @@ import (
 	apimeta "github.com/projectcapsule/capsule/pkg/api/meta"
 	capsulerbac "github.com/projectcapsule/capsule/pkg/api/rbac"
 	apiruntime "github.com/projectcapsule/capsule/pkg/api/runtime"
+	evt "github.com/projectcapsule/capsule/pkg/runtime/events"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8smeta "k8s.io/apimachinery/pkg/api/meta"
@@ -87,7 +88,7 @@ var _ = Describe(
 
 			By("rejecting controller-owned status changes when no transition was requested")
 			tampered := requested.DeepCopy()
-			tampered.Status.Approved.Resources = injectedResources
+			tampered.Status.Request.Resources = injectedResources
 			err := reviewerClient.Status().Patch(
 				ctx,
 				tampered,
@@ -117,20 +118,24 @@ var _ = Describe(
 
 			By("discarding injected status while applying an authenticated phase transition")
 			requested = waitForBreakRequestPhase(ctx, request, capsulev1beta2.RequestPhaseRequested)
-			expectedApproved := requested.Status.Approved.DeepCopy()
-			expectedServiceAccount := requested.Status.ServiceAccount.DeepCopy()
-			expectedTemplate := requested.Status.Template.DeepCopy()
+			expectedApproved := requested.Status.Request.DeepCopy()
+			expectedServiceAccount := requested.Status.Request.Impersonation.DeepCopy()
+			expectedTemplate := requested.Status.Request.Template.DeepCopy()
 
 			hijacked := requested.DeepCopy()
 			hijacked.Status.Phase = capsulev1beta2.RequestPhaseApproved
-			hijacked.Status.Approved.Resources = injectedResources
-			hijacked.Status.ServiceAccount = &apimeta.NamespacedRFC1123ObjectReferenceWithNamespace{
+			hijacked.Status.Request.Resources = injectedResources
+			hijacked.Status.Request.Impersonation = &apimeta.NamespacedRFC1123ObjectReferenceWithNamespace{
 				Name:      "injected-runner",
 				Namespace: "kube-system",
 			}
-			hijacked.Status.Template = &capsulev1beta2.ResolvedBreakRequestTemplateReference{
+			hijacked.Status.Request.Template = &capsulev1beta2.ResolvedBreakRequestTemplateReference{
 				BreakRequestTemplateReference: globalBreakRequestTemplateReference("injected-template"),
 				ResourceVersion:               "injected-version",
+			}
+			hijacked.Status.Request.Approvals = &breaktheglassapi.ApprovalSpec{
+				Auto:       true,
+				Conditions: []string{"false"},
 			}
 			hijacked.Status.Review = &capsulev1beta2.ReviewInfo{
 				Reviewer: &breaktheglassapi.AccessEntity{
@@ -140,6 +145,12 @@ var _ = Describe(
 				Verdict: capsulev1beta2.RequestVerdictDenied,
 				Message: "reviewed from an untrusted payload",
 			}
+			hijacked.Status.Transitions = append(hijacked.Status.Transitions, capsulev1beta2.BreakRequestTransition{
+				Type:      capsulev1beta2.RequestPhaseApproved,
+				Timestamp: metav1.Now(),
+				Actor:     capsulev1beta2.BreakRequestTransitionActor{Name: "mallory", Type: breaktheglassapi.AccessEntityTypeSystem},
+				Reason:    "InjectedTransition",
+			})
 			hijacked.Status.Size = 999
 
 			Expect(reviewerClient.Status().Patch(
@@ -149,9 +160,9 @@ var _ = Describe(
 			)).To(Succeed())
 
 			active := waitForBreakRequestPhase(ctx, request, capsulev1beta2.RequestPhaseActive)
-			Expect(active.Status.Approved).To(Equal(expectedApproved))
-			Expect(active.Status.ServiceAccount).To(Equal(expectedServiceAccount))
-			Expect(active.Status.Template).To(Equal(expectedTemplate))
+			Expect(active.Status.Request).To(Equal(expectedApproved))
+			Expect(active.Status.Request.Impersonation).To(Equal(expectedServiceAccount))
+			Expect(active.Status.Request.Template).To(Equal(expectedTemplate))
 			Expect(active.Status.Size).To(Equal(uint(1)))
 			Expect(active.Status.Review).NotTo(BeNil())
 			Expect(active.Status.Review.Reviewer).NotTo(BeNil())
@@ -159,6 +170,25 @@ var _ = Describe(
 			Expect(active.Status.Review.Reviewer.Type).To(Equal(breaktheglassapi.AccessEntityTypeUser))
 			Expect(active.Status.Review.Verdict).To(Equal(capsulev1beta2.RequestVerdictApproved))
 			Expect(active.Status.Review.Message).To(Equal("reviewed from an untrusted payload"))
+			createdTransition := active.LatestTransition(capsulev1beta2.RequestPhaseCreated)
+			Expect(createdTransition).NotTo(BeNil())
+			Expect(createdTransition.Actor.Name).To(Equal(active.Spec.Requestor.Name))
+			Expect(createdTransition.Actor.Type).To(Equal(active.Spec.Requestor.Type))
+			Expect(createdTransition.Timestamp).To(Equal(active.CreationTimestamp))
+			Expect(active.Status.Transitions[0].Type).To(Equal(capsulev1beta2.RequestPhaseCreated))
+			approvedTransition := active.LatestTransition(capsulev1beta2.RequestPhaseApproved)
+			Expect(approvedTransition).NotTo(BeNil())
+			Expect(approvedTransition.Actor.Name).To(Equal(breakRequestLifecycleReviewer))
+			Expect(approvedTransition.Actor.Type).To(Equal(breaktheglassapi.AccessEntityTypeUser))
+			Expect(approvedTransition.Reason).To(Equal("ApprovedByUser"))
+			activeTransition := active.LatestTransition(capsulev1beta2.RequestPhaseActive)
+			Expect(activeTransition).NotTo(BeNil())
+			Expect(activeTransition.Actor.Type).To(Equal(breaktheglassapi.AccessEntityTypeSystem))
+			expectBreakRequestEvent(ctx, active, evt.ReasonBreakRequestApproved, evt.ActionApproved)
+			for _, transition := range active.Status.Transitions {
+				Expect(transition.Actor.Name).NotTo(Equal("mallory"))
+				Expect(transition.Reason).NotTo(Equal("InjectedTransition"))
+			}
 
 			original := &corev1.ConfigMap{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
@@ -237,7 +267,8 @@ var _ = Describe(
 				DeferCleanup(func() { cleanupLifecycleBreakRequest(ctx, request) })
 
 				patchLifecyclePhase(ctx, reviewerClient, request, capsulev1beta2.RequestPhaseDenied)
-				waitForBreakRequestPhase(ctx, request, capsulev1beta2.RequestPhaseDenied)
+				denied := waitForBreakRequestPhase(ctx, request, capsulev1beta2.RequestPhaseDenied)
+				expectBreakRequestEvent(ctx, denied, evt.ReasonBreakRequestDenied, evt.ActionDenied)
 				expectBreakRequestDeletionDenied(ctx, request, capsulev1beta2.RequestPhaseDenied)
 			})
 
@@ -326,7 +357,7 @@ var _ = Describe(
 				requested := waitForBreakRequestPhase(ctx, request, capsulev1beta2.RequestPhaseRequested)
 				before := requested.DeepCopy()
 				keepFor := breaktheglassapi.ExtendedDuration(8 * time.Second)
-				requested.Status.Approved.KeepFor = &keepFor
+				requested.Status.Request.KeepFor = &keepFor
 				requested.Status.Phase = capsulev1beta2.RequestPhaseApproved
 				Expect(reviewerClient.Status().Patch(
 					ctx,
@@ -351,7 +382,7 @@ var _ = Describe(
 			})
 		})
 
-		It("keeps a failed render observable and blocks application, approval, and deletion", func() {
+		It("keeps a failed render observable and blocks application and approval", func() {
 			request := &capsulev1beta2.BreakRequest{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "e2e-btg-rendering-failure",
@@ -373,12 +404,12 @@ var _ = Describe(
 				g.Expect(ready.Reason).To(Equal("TemplateRenderingFailed"))
 				g.Expect(ready.Message).To(ContainSubstring("rendering resource 1 template"))
 				g.Expect(ready.Message).To(ContainSubstring("map has no entry for key"))
-				g.Expect(current.Status.Phase).To(BeEmpty())
-				g.Expect(current.Status.Template).NotTo(BeNil())
-				g.Expect(current.Status.Template.Name).To(Equal(renderingTemplate.Name))
-				g.Expect(current.Status.Template.ResourceVersion).NotTo(BeEmpty())
-				g.Expect(current.Status.Approved).NotTo(BeNil())
-				g.Expect(current.Status.Approved.Resources).To(HaveLen(1))
+				g.Expect(current.Status.Phase).To(Equal(capsulev1beta2.RequestPhaseCreated))
+				g.Expect(current.Status.Request.Template).NotTo(BeNil())
+				g.Expect(current.Status.Request.Template.Name).To(Equal(renderingTemplate.Name))
+				g.Expect(current.Status.Request.Template.ResourceVersion).NotTo(BeEmpty())
+				g.Expect(current.Status.Request).NotTo(BeNil())
+				g.Expect(current.Status.Request.Resources).To(HaveLen(1))
 				g.Expect(current.Status.Size).To(BeZero())
 				g.Expect(current.Status.ProcessedItems).To(BeEmpty())
 			}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
@@ -408,8 +439,8 @@ var _ = Describe(
 
 			current = &capsulev1beta2.BreakRequest{}
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(request), current)).To(Succeed())
-			Expect(current.Status.Phase).To(BeEmpty())
-			expectBreakRequestDeletionDenied(ctx, request, "")
+			Expect(current.Status.Phase).To(Equal(capsulev1beta2.RequestPhaseCreated))
+			Expect(k8sClient.Delete(ctx, current)).To(Succeed())
 		})
 	},
 )
@@ -490,10 +521,10 @@ func newLifecycleBreakRequest(name, templateName, targetName string) *capsulev1b
 }
 
 func requireRenderedBreakRequestStatus(request *capsulev1beta2.BreakRequest) {
-	Expect(request.Status.Approved).NotTo(BeNil())
-	Expect(request.Status.Approved.Resources).NotTo(BeEmpty())
-	Expect(request.Status.ServiceAccount).NotTo(BeNil())
-	Expect(request.Status.Template).NotTo(BeNil())
+	Expect(request.Status.Request).NotTo(BeNil())
+	Expect(request.Status.Request.Resources).NotTo(BeEmpty())
+	Expect(request.Status.Request.Impersonation).NotTo(BeNil())
+	Expect(request.Status.Request.Template).NotTo(BeNil())
 }
 
 func waitForBreakRequestPhase(
@@ -508,6 +539,35 @@ func waitForBreakRequestPhase(
 	}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
 
 	return current.DeepCopy()
+}
+
+func expectBreakRequestEvent(
+	ctx context.Context,
+	request *capsulev1beta2.BreakRequest,
+	reason,
+	action string,
+) {
+	cs := clusterAdminClient()
+
+	Eventually(func(g Gomega) {
+		eventList, err := cs.CoreV1().Events(request.Namespace).List(ctx, metav1.ListOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+
+		for _, event := range eventList.Items {
+			if event.InvolvedObject.UID == request.UID &&
+				event.Reason == reason &&
+				event.Action == action {
+				return
+			}
+		}
+
+		g.Expect(eventList.Items).To(ContainElement(WithTransform(
+			func(event corev1.Event) string {
+				return fmt.Sprintf("%s/%s/%s", event.InvolvedObject.UID, event.Reason, event.Action)
+			},
+			Equal(fmt.Sprintf("%s/%s/%s", request.UID, reason, action)),
+		)))
+	}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
 }
 
 func patchLifecyclePhase(

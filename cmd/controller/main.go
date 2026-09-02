@@ -754,6 +754,7 @@ func main() {
 		),
 		route.Node(handlers.InCapsuleGroups(cfg, node.UserMetadataHandler(cfg, kubeVersion))),
 		route.Cordoning(handlers.InCapsuleGroups(cfg, generic.CordoningHandler(cfg))),
+		route.ServiceAccountReferences(serviceaccounts.ReferenceProtection()),
 		route.ServiceAccounts(
 			serviceaccounts.Handler(
 				cfg,

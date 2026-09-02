@@ -29,7 +29,7 @@ spec:
       name: ActiveUntil
       priority: 10
       type: string
-    - jsonPath: .status.approved.duration
+    - jsonPath: .status.request.duration
       name: Duration
       priority: 10
       type: string
@@ -47,6 +47,10 @@ spec:
       jsonPath: .status.size
       name: Items
       type: integer
+    - description: Age
+      jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
     name: v1beta2
     schema:
       openAPIV3Schema:
@@ -148,85 +152,9 @@ spec:
                     format: date-time
                     type: string
                 type: object
-              approved:
-                description: |-
-                  Approved contains the rendered resources and effective lifecycle properties
-                  presented for approval. Once approved, this snapshot is authoritative.
-                properties:
-                  duration:
-                    type: string
-                  keepFor:
-                    pattern: ^([0-9]+(\.[0-9]+)?(s|m|h|d|w))+$
-                    type: string
-                  resources:
-                    description: |-
-                      Resources contains the fully rendered manifests approved for this request.
-                      These resources are the source of truth for server-side apply and pruning;
-                      source templates and rendering context are never copied into the request.
-                    items:
-                      description: |-
-                        RenderedResource is an execution-ready group of Kubernetes manifests
-                        produced from a ResourceTemplate. It intentionally cannot contain a source
-                        template so status consumers and reconcilers only observe concrete targets.
-                      properties:
-                        policy:
-                          description: Policy controls how every rendered target is
-                            created and managed.
-                          properties:
-                            creation:
-                              default: Owner
-                              description: |-
-                                Creation controls how an existing target is handled. Owner requires the
-                                resource to have been created by the applying controller and otherwise
-                                returns an error. Merge adopts an existing resource when possible and
-                                creates the resource when it does not exist.
-                              enum:
-                              - Owner
-                              - Merge
-                              type: string
-                            deletion:
-                              default: Remove
-                              description: |-
-                                Deletion controls what happens when the parent stops managing the target.
-                                Remove deletes resources created for the parent and relinquishes adopted
-                                resources. Orphan keeps the resource and removes Capsule's lifecycle
-                                metadata. Removal is the default.
-                              enum:
-                              - Remove
-                              - Orphan
-                              type: string
-                            force:
-                              default: false
-                              description: Force allows server-side apply to acquire
-                                conflicting field ownership.
-                              type: boolean
-                            protect:
-                              default: true
-                              description: |-
-                                Protect prevents users from changing or deleting the target through
-                                admission while it is managed. Protection is enabled by default.
-                              type: boolean
-                          type: object
-                        targets:
-                          description: Targets are the fully rendered Kubernetes manifests.
-                          items:
-                            type: object
-                            x-kubernetes-preserve-unknown-fields: true
-                          minItems: 1
-                          type: array
-                      required:
-                      - targets
-                      type: object
-                    type: array
-                  startTime:
-                    format: date-time
-                    type: string
-                type: object
               conditions:
-                description: |-
-                  Conditions applied to the request.
-                  Known conditions are "Ready", "Requested", "Pending", "Denied", "Approved", "Active" and "Expired".
-                  The latest condition is reflected in the phase.
+                description: Conditions describes current operational state such as
+                  readiness.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -282,6 +210,40 @@ spec:
                   - type
                   type: object
                 type: array
+              failure:
+                description: |-
+                  Failure describes a recoverable preflight or activation failure. RetryPhase
+                  is the trusted lifecycle phase Capsule resumes after a successful retry.
+                properties:
+                  message:
+                    description: Message contains the latest actionable failure returned
+                      by Kubernetes.
+                    type: string
+                  reason:
+                    description: Reason is the stable machine-readable Ready condition
+                      reason.
+                    type: string
+                  retryPhase:
+                    description: RetryPhase is the phase Capsule resumes after recovery
+                      succeeds.
+                    enum:
+                    - Requested
+                    - Approved
+                    type: string
+                  stage:
+                    description: |-
+                      Stage identifies whether the failure happened before review or while
+                      activating an already approved request.
+                    enum:
+                    - Preflight
+                    - Activation
+                    type: string
+                required:
+                - message
+                - reason
+                - retryPhase
+                - stage
+                type: object
               keepUntil:
                 description: |-
                   The time until which the BreakRequest should be retained after it expires (e.g. for auditing).
@@ -290,11 +252,14 @@ spec:
                 type: string
               phase:
                 enum:
+                - Created
                 - Requested
                 - Pending
                 - Denied
                 - Approved
                 - Active
+                - Failed
+                - Retrying
                 - Expired
                 type: string
               processedItems:
@@ -365,6 +330,168 @@ spec:
                       type: string
                   type: object
                 type: array
+              request:
+                description: |-
+                  Request contains the resolved template, execution identity, lifecycle
+                  properties, and rendered resources presented for review.
+                properties:
+                  approvals:
+                    description: |-
+                      Approvals is the approval policy copied from the resolved template. It is
+                      immutable after rendering so an in-flight request is reviewed against the
+                      policy presented with its resource snapshot.
+                    properties:
+                      approvers:
+                        description: |-
+                          Approvers lists the subjects permitted to approve a request manually.
+                          When omitted, any subject with permission to update the request status may
+                          approve it.
+                        items:
+                          properties:
+                            kind:
+                              description: Kind of entity. Possible values are "User",
+                                "Group", and "ServiceAccount"
+                              enum:
+                              - User
+                              - Group
+                              - ServiceAccount
+                              type: string
+                            name:
+                              description: Name of the entity.
+                              type: string
+                          required:
+                          - kind
+                          - name
+                          type: object
+                        type: array
+                      auto:
+                        description: |-
+                          Auto automatically approves matching requests. Approvers are ignored for
+                          automatic approvals.
+                        type: boolean
+                      conditions:
+                        description: |-
+                          Conditions contains CEL expressions evaluated as an OR list. At least one
+                          expression must evaluate to true. When omitted, approval is unconditional.
+                        items:
+                          minLength: 1
+                          type: string
+                        type: array
+                    type: object
+                  duration:
+                    type: string
+                  impersonation:
+                    description: |-
+                      Impersonation is the resolved identity used for template context loading
+                      and managed-resource actions. Capsule records its controller ServiceAccount
+                      when no impersonation is configured.
+                    properties:
+                      name:
+                        description: Name of the referent.
+                        maxLength: 63
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                      namespace:
+                        description: Namespace of the referent.
+                        maxLength: 253
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                  keepFor:
+                    pattern: ^([0-9]+(\.[0-9]+)?(s|m|h|d|w))+$
+                    type: string
+                  resources:
+                    description: |-
+                      Resources contains the fully rendered manifests prepared for this request.
+                      These resources are the source of truth for server-side apply and pruning;
+                      source templates and rendering context are never copied into the request.
+                    items:
+                      description: |-
+                        RenderedResource is an execution-ready group of Kubernetes manifests
+                        produced from a ResourceTemplate. It intentionally cannot contain a source
+                        template so status consumers and reconcilers only observe concrete targets.
+                      properties:
+                        policy:
+                          description: Policy controls how every rendered target is
+                            created and managed.
+                          properties:
+                            creation:
+                              default: Owner
+                              description: |-
+                                Creation controls how an existing target is handled. Owner requires the
+                                resource to have been created by the applying controller and otherwise
+                                returns an error. Merge adopts an existing resource when possible and
+                                creates the resource when it does not exist.
+                              enum:
+                              - Owner
+                              - Merge
+                              type: string
+                            deletion:
+                              default: Remove
+                              description: |-
+                                Deletion controls what happens when the parent stops managing the target.
+                                Remove deletes resources created for the parent and relinquishes adopted
+                                resources. Orphan keeps the resource and removes Capsule's lifecycle
+                                metadata. Removal is the default.
+                              enum:
+                              - Remove
+                              - Orphan
+                              type: string
+                            force:
+                              default: false
+                              description: Force allows server-side apply to acquire
+                                conflicting field ownership.
+                              type: boolean
+                            protect:
+                              default: true
+                              description: |-
+                                Protect prevents users from changing or deleting the target through
+                                admission while it is managed. Protection is enabled by default.
+                              type: boolean
+                          type: object
+                        targets:
+                          description: Targets are the fully rendered Kubernetes manifests.
+                          items:
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                          minItems: 1
+                          type: array
+                      required:
+                      - targets
+                      type: object
+                    type: array
+                  startTime:
+                    format: date-time
+                    type: string
+                  template:
+                    description: Template identifies the exact template version used
+                      to render the request.
+                    properties:
+                      kind:
+                        description: Kind of template being referenced.
+                        enum:
+                        - BreakRequestTemplate
+                        - GlobalBreakRequestTemplate
+                        type: string
+                      name:
+                        description: Name of the template being referenced.
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                      resourceVersion:
+                        description: ResourceVersion of the template used to render
+                          the request resources.
+                        type: string
+                    required:
+                    - kind
+                    - name
+                    - resourceVersion
+                    type: object
+                type: object
               review:
                 description: Review refers to the subject that either approved or
                   denied the request
@@ -400,55 +527,79 @@ spec:
                     - Approved
                     type: string
                 type: object
-              serviceAccount:
-                description: |-
-                  ServiceAccount is the resolved identity used for template context loading
-                  and managed-resource actions. Capsule records its controller ServiceAccount
-                  when no impersonation is configured.
-                properties:
-                  name:
-                    description: Name of the referent.
-                    maxLength: 63
-                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                    type: string
-                  namespace:
-                    description: Namespace of the referent.
-                    maxLength: 253
-                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                    type: string
-                required:
-                - name
-                - namespace
-                type: object
               size:
                 description: Number of managed resources.
                 type: integer
-              template:
+              transitions:
                 description: |-
-                  Template identifies the exact template version used to render the approved
-                  resource snapshot.
-                properties:
-                  kind:
-                    description: Kind of template being referenced.
-                    enum:
-                    - BreakRequestTemplate
-                    - GlobalBreakRequestTemplate
-                    type: string
-                  name:
-                    description: Name of the template being referenced.
-                    maxLength: 253
-                    minLength: 1
-                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                    type: string
-                  resourceVersion:
-                    description: ResourceVersion of the template used to render the
-                      request resources.
-                    type: string
-                required:
-                - kind
-                - name
-                - resourceVersion
-                type: object
+                  Transitions is the chronological, append-only audit trail of lifecycle
+                  changes. Conditions remain reserved for operational state such as Ready.
+                items:
+                  description: BreakRequestTransition records one authenticated lifecycle
+                    transition.
+                  properties:
+                    actor:
+                      description: |-
+                        Actor is the authenticated user, ServiceAccount, or Capsule system actor
+                        responsible for the transition. Group claims are deliberately not copied
+                        into the audit trail.
+                      properties:
+                        name:
+                          description: Name is the authenticated actor name.
+                          type: string
+                        type:
+                          description: Type identifies the kind of authenticated actor.
+                          enum:
+                          - User
+                          - Group
+                          - System
+                          - ServiceAccount
+                          type: string
+                      required:
+                      - name
+                      - type
+                      type: object
+                    eventTime:
+                      description: |-
+                        EventTime is set after Capsule emits the Kubernetes lifecycle event for
+                        this transition.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Message is the human-readable explanation of the
+                        transition.
+                      type: string
+                    reason:
+                      description: Reason is a stable machine-readable explanation
+                        of the transition.
+                      type: string
+                    timestamp:
+                      description: Timestamp is when the transition was requested
+                        or performed.
+                      format: date-time
+                      type: string
+                    type:
+                      description: |-
+                        Type identifies the lifecycle state entered by this transition. The
+                        previous state can be derived from the preceding chronological entry.
+                      enum:
+                      - Created
+                      - Requested
+                      - Pending
+                      - Denied
+                      - Approved
+                      - Active
+                      - Failed
+                      - Retrying
+                      - Expired
+                      type: string
+                  required:
+                  - actor
+                  - reason
+                  - timestamp
+                  - type
+                  type: object
+                type: array
             required:
             - size
             type: object

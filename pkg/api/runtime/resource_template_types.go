@@ -87,6 +87,8 @@ type ResourceTemplate struct {
 	Policy ResourceTemplatePolicy `json:"policy,omitempty"`
 
 	// Targets are Kubernetes resource objects to render and manage with Policy.
+	// Parameters and loaded context use the flat template root; trusted request
+	// metadata is available under .request.
 	// +optional
 	// +kubebuilder:validation:MinItems=1
 	Targets []k8sruntime.RawExtension `json:"targets,omitempty"`
@@ -94,7 +96,8 @@ type ResourceTemplate struct {
 	// Template is an optional Go template which may render one or more YAML or
 	// JSON Kubernetes resources separated by YAML document markers. Request
 	// parameters are available under .params and loaded resources under
-	// .context.resources.
+	// .context.resources. Trusted request metadata is available under .request
+	// with name, username, groups, and timestamp fields.
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	Template string `json:"template,omitempty"`

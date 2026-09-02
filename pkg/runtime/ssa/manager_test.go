@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8smeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -188,6 +189,52 @@ func TestApplyUsesServerSideApply(t *testing.T) {
 	}
 	if value := apply.object.GetAnnotations()[meta.BreakRequestServiceAccountAnnotation]; value != "system:serviceaccount:test:runner" {
 		t.Fatalf("Apply() protection ServiceAccount = %q, want resolved identity", value)
+	}
+}
+
+func TestApplyDryRunUsesServerSideApplyWithoutPersisting(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	base := fake.NewClientBuilder().WithScheme(scheme).Build()
+	recording := &applyingClient{Client: base}
+	manager := Manager{Metadata: Metadata{
+		CreatedByValue:    testCreatedBy,
+		ManagedByValue:    testCreatedBy,
+		ProtectedByValue:  testCreatedBy,
+		AppManagedByValue: testCreatedBy,
+	}}
+	desired := configMap("dry-run", map[string]any{"requested": "value"})
+
+	result, err := manager.Apply(context.Background(), recording, desired, ApplyOptions{
+		FieldOwner: testFieldOwner,
+		DryRun:     true,
+	})
+	if err != nil {
+		t.Fatalf("Apply() dry-run error = %v", err)
+	}
+	if !result.Created {
+		t.Fatal("Apply() dry-run created = false, want prospective creation")
+	}
+	if result.LastApply != nil {
+		t.Fatalf("Apply() dry-run lastApply = %v, want nil", result.LastApply)
+	}
+	if len(recording.patches) != 1 {
+		t.Fatalf("Apply() dry-run patches = %d, want only SSA preflight", len(recording.patches))
+	}
+	if got := recording.patches[0].options.DryRun; len(got) != 1 || got[0] != metav1.DryRunAll {
+		t.Fatalf("Apply() dry-run option = %#v, want [%q]", got, metav1.DryRunAll)
+	}
+
+	persisted := &unstructured.Unstructured{}
+	persisted.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
+	err = base.Get(context.Background(), client.ObjectKey{Name: "dry-run", Namespace: "default"}, persisted)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("dry-run object persisted: %v", err)
 	}
 }
 
@@ -549,6 +596,9 @@ func (c *applyingClient) Patch(
 	})
 
 	if patch.Type() != types.ApplyPatchType {
+		return nil
+	}
+	if len(options.DryRun) > 0 {
 		return nil
 	}
 

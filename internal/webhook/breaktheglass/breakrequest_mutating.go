@@ -94,9 +94,9 @@ func (h *breakRequestMutationHandler) OnUpdate(_ client.Client, _ client.Reader,
 
 		switch newBr.Status.Phase {
 		case capsulev1beta2.RequestPhaseApproved:
-			properties := approvedPropertiesForTransition(oldBr, newBr)
+			properties := requestForTransition(oldBr, newBr)
 			if properties == nil {
-				return ad.Deny("cannot approve BreakRequest without approved properties")
+				return ad.Deny("cannot approve BreakRequest without request properties")
 			}
 
 			err = transitioned.ApproveRequest(entity, properties, message)
@@ -106,7 +106,12 @@ func (h *breakRequestMutationHandler) OnUpdate(_ client.Client, _ client.Reader,
 			err = transitioned.ActiveRequest(entity)
 		case capsulev1beta2.RequestPhaseExpired:
 			err = transitioned.ExpireRequest(entity)
-		case capsulev1beta2.RequestPhaseRequested, capsulev1beta2.RequestPhasePending:
+		case capsulev1beta2.RequestPhaseRetrying:
+			err = transitioned.RetryRequest(entity)
+		case capsulev1beta2.RequestPhaseRequested,
+			capsulev1beta2.RequestPhaseCreated,
+			capsulev1beta2.RequestPhasePending,
+			capsulev1beta2.RequestPhaseFailed:
 			return ad.Denyf(
 				"transitioning BreakRequest from %s to %s is not supported",
 				oldBr.Status.Phase,
@@ -133,22 +138,22 @@ func (h *breakRequestMutationHandler) OnUpdate(_ client.Client, _ client.Reader,
 	}
 }
 
-func approvedPropertiesForTransition(
+func requestForTransition(
 	oldBr,
 	newBr *capsulev1beta2.BreakRequest,
-) *capsulev1beta2.ApprovedProperties {
-	if oldBr.Status.Approved == nil {
+) *capsulev1beta2.BreakRequestStatusRequest {
+	if oldBr.Status.Request == nil {
 		return nil
 	}
 
-	properties := oldBr.Status.Approved.DeepCopy()
-	if newBr.Status.Approved == nil {
+	properties := oldBr.Status.Request.DeepCopy()
+	if newBr.Status.Request == nil {
 		return properties
 	}
 
-	properties.KeepFor = newBr.Status.Approved.KeepFor
-	properties.Duration = newBr.Status.Approved.Duration
-	properties.StartTime = newBr.Status.Approved.StartTime
+	properties.KeepFor = newBr.Status.Request.KeepFor
+	properties.Duration = newBr.Status.Request.Duration
+	properties.StartTime = newBr.Status.Request.StartTime
 
 	return properties
 }

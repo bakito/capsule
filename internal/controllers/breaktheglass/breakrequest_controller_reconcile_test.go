@@ -25,8 +25,10 @@ import (
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
 	mc "github.com/projectcapsule/capsule/internal/mocks/client"
+	"github.com/projectcapsule/capsule/pkg/api/breaktheglass"
 	"github.com/projectcapsule/capsule/pkg/api/meta"
 	apiruntime "github.com/projectcapsule/capsule/pkg/api/runtime"
+	evt "github.com/projectcapsule/capsule/pkg/runtime/events"
 )
 
 const (
@@ -82,10 +84,15 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 			name: "newly created",
 			br: &capsulev1beta2.BreakRequest{
 				ObjectMeta: v1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: "default",
+					Name:              resourceName,
+					Namespace:         "default",
+					CreationTimestamp: v1.NewTime(time.Date(2026, time.September, 2, 8, 0, 0, 0, time.UTC)),
 				},
 				Spec: capsulev1beta2.BreakRequestSpec{
+					Requestor: breaktheglass.AccessEntity{
+						Name: "alice",
+						Type: breaktheglass.AccessEntityTypeUser,
+					},
 					Template: capsulev1beta2.GlobalBreakRequestTemplateReference{
 						Kind: capsulev1beta2.GlobalBreakRequestTemplateKind,
 						Name: templateName,
@@ -101,18 +108,26 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 							Targets: []runtime.RawExtension{mtConfigMapRendered},
 						}}
 					})
+				cl.EXPECT().Get(gm.Any(), gm.Any(), matchUs).
+					Return(apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, "test-configmap"))
+				cl.EXPECT().Patch(gm.Any(), matchUs, gm.Any(), gm.Any(), gm.Any()).Return(nil)
 				scl.EXPECT().Update(gm.Any(), matchBr, gm.Any()).Return(nil)
 			},
 			verify: func(t *testing.T, br *capsulev1beta2.BreakRequest) {
-				assert.Len(t, br.Status.Conditions, 2)
+				assert.Len(t, br.Status.Conditions, 1)
 				assert.Equal(t, capsulev1beta2.RequestPhaseRequested, br.Status.Phase)
-				require.NotNil(t, br.Status.Template)
-				assert.Equal(t, capsulev1beta2.GlobalBreakRequestTemplateKind, br.Status.Template.Kind)
-				assert.Equal(t, templateName, br.Status.Template.Name)
-				assert.Equal(t, "1234", br.Status.Template.ResourceVersion)
-				require.NotNil(t, br.Status.Approved)
-				require.Len(t, br.Status.Approved.Resources, 1)
-				require.Len(t, br.Status.Approved.Resources[0].Targets, 1)
+				require.Len(t, br.Status.Transitions, 2)
+				assert.Equal(t, capsulev1beta2.RequestPhaseCreated, br.Status.Transitions[0].Type)
+				assert.Equal(t, "alice", br.Status.Transitions[0].Actor.Name)
+				assert.Equal(t, br.CreationTimestamp, br.Status.Transitions[0].Timestamp)
+				assert.Equal(t, capsulev1beta2.RequestPhaseRequested, br.Status.Transitions[1].Type)
+				require.NotNil(t, br.Status.Request.Template)
+				assert.Equal(t, capsulev1beta2.GlobalBreakRequestTemplateKind, br.Status.Request.Template.Kind)
+				assert.Equal(t, templateName, br.Status.Request.Template.Name)
+				assert.Equal(t, "1234", br.Status.Request.Template.ResourceVersion)
+				require.NotNil(t, br.Status.Request)
+				require.Len(t, br.Status.Request.Resources, 1)
+				require.Len(t, br.Status.Request.Resources[0].Targets, 1)
 				ready := findCondition(br.Status.Conditions, meta.ReadyCondition)
 				require.NotNil(t, ready)
 				assert.Equal(t, v1.ConditionTrue, ready.Status)
@@ -142,16 +157,19 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 							Targets: []runtime.RawExtension{mtConfigMapRendered},
 						}}
 					})
+				cl.EXPECT().Get(gm.Any(), gm.Any(), matchUs).
+					Return(apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, "test-configmap"))
+				cl.EXPECT().Patch(gm.Any(), matchUs, gm.Any(), gm.Any(), gm.Any()).Return(nil)
 				scl.EXPECT().Update(gm.Any(), matchBr, gm.Any()).Return(nil)
 			},
 			verify: func(t *testing.T, br *capsulev1beta2.BreakRequest) {
-				require.NotNil(t, br.Status.Template)
-				assert.Equal(t, capsulev1beta2.BreakRequestTemplateKind, br.Status.Template.Kind)
-				assert.Equal(t, templateName, br.Status.Template.Name)
-				assert.Equal(t, "local-1234", br.Status.Template.ResourceVersion)
-				require.NotNil(t, br.Status.Approved)
-				require.Len(t, br.Status.Approved.Resources, 1)
-				require.Len(t, br.Status.Approved.Resources[0].Targets, 1)
+				require.NotNil(t, br.Status.Request.Template)
+				assert.Equal(t, capsulev1beta2.BreakRequestTemplateKind, br.Status.Request.Template.Kind)
+				assert.Equal(t, templateName, br.Status.Request.Template.Name)
+				assert.Equal(t, "local-1234", br.Status.Request.Template.ResourceVersion)
+				require.NotNil(t, br.Status.Request)
+				require.Len(t, br.Status.Request.Resources, 1)
+				require.Len(t, br.Status.Request.Resources[0].Targets, 1)
 			},
 		},
 		{
@@ -177,9 +195,11 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 				scl.EXPECT().Update(gm.Any(), matchBr, gm.Any()).Return(nil)
 			},
 			verify: func(t *testing.T, br *capsulev1beta2.BreakRequest) {
-				assert.Empty(t, br.Status.Phase)
-				require.NotNil(t, br.Status.Approved)
-				assert.Empty(t, br.Status.Approved.Resources)
+				assert.Equal(t, capsulev1beta2.RequestPhaseCreated, br.Status.Phase)
+				require.Len(t, br.Status.Transitions, 1)
+				assert.Equal(t, capsulev1beta2.RequestPhaseCreated, br.Status.Transitions[0].Type)
+				require.NotNil(t, br.Status.Request)
+				assert.Empty(t, br.Status.Request.Resources)
 				ready := findCondition(br.Status.Conditions, meta.ReadyCondition)
 				require.NotNil(t, ready)
 				assert.Equal(t, v1.ConditionFalse, ready.Status)
@@ -187,6 +207,109 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 				assert.Contains(t, ready.Message, "invalid params")
 			},
 			wantErr: true,
+		},
+		{
+			name: "dry-run failure is recoverable before review",
+			br: &capsulev1beta2.BreakRequest{
+				ObjectMeta: v1.ObjectMeta{Name: resourceName, Namespace: "default"},
+				Spec: capsulev1beta2.BreakRequestSpec{Template: capsulev1beta2.BreakRequestTemplateReference{
+					Kind: capsulev1beta2.GlobalBreakRequestTemplateKind,
+					Name: templateName,
+				}},
+			},
+			mocks: func(cl *mc.MockClient, scl *mc.MockSubResourceWriter) {
+				cl.EXPECT().Get(gm.Any(), gm.Any(), matchBrt).
+					Do(func(_ any, _ any, brt *capsulev1beta2.GlobalBreakRequestTemplate, _ ...any) {
+						brt.Spec.Resources = []apiruntime.ResourceTemplate{{
+							Targets: []runtime.RawExtension{mtConfigMapRendered},
+						}}
+					})
+				cl.EXPECT().Get(gm.Any(), gm.Any(), matchBr).Return(nil)
+				cl.EXPECT().Get(gm.Any(), gm.Any(), matchUs).
+					Return(apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, "test-configmap"))
+				cl.EXPECT().Patch(gm.Any(), matchUs, gm.Any(), gm.Any(), gm.Any()).Return(assert.AnError)
+				scl.EXPECT().Update(gm.Any(), matchBr, gm.Any()).Return(nil)
+			},
+			verify: func(t *testing.T, br *capsulev1beta2.BreakRequest) {
+				assert.Equal(t, capsulev1beta2.RequestPhaseFailed, br.Status.Phase)
+				require.NotNil(t, br.Status.Failure)
+				assert.Equal(t, capsulev1beta2.RequestFailureStagePreflight, br.Status.Failure.Stage)
+				assert.Equal(t, capsulev1beta2.RequestPhaseRequested, br.Status.Failure.RetryPhase)
+				assert.Equal(t, resourceDryRunFailedReason, br.Status.Failure.Reason)
+				assert.Empty(t, br.Status.ProcessedItems)
+				ready := findCondition(br.Status.Conditions, meta.ReadyCondition)
+				require.NotNil(t, ready)
+				assert.Equal(t, v1.ConditionFalse, ready.Status)
+				assert.Equal(t, resourceDryRunFailedReason, ready.Reason)
+			},
+			wantErr: true,
+		},
+		{
+			name: "failed request remains not ready while waiting for retry",
+			br: &capsulev1beta2.BreakRequest{
+				ObjectMeta: v1.ObjectMeta{Name: resourceName, Namespace: "default"},
+				Status: capsulev1beta2.BreakRequestStatus{
+					Phase: capsulev1beta2.RequestPhaseFailed,
+					Failure: &capsulev1beta2.BreakRequestFailure{
+						Stage:      capsulev1beta2.RequestFailureStagePreflight,
+						RetryPhase: capsulev1beta2.RequestPhaseRequested,
+						Reason:     resourceDryRunFailedReason,
+						Message:    "service account cannot patch ConfigMaps",
+					},
+					Conditions: []v1.Condition{{
+						Type:               meta.ReadyCondition,
+						Status:             v1.ConditionFalse,
+						Reason:             resourceDryRunFailedReason,
+						Message:            "service account cannot patch ConfigMaps",
+						LastTransitionTime: v1.Now(),
+					}},
+				},
+			},
+			mocks: func(cl *mc.MockClient, scl *mc.MockSubResourceWriter) {
+				cl.EXPECT().Get(gm.Any(), gm.Any(), matchBr).Return(nil)
+				scl.EXPECT().Update(gm.Any(), matchBr, gm.Any()).Return(nil)
+			},
+			verify: func(t *testing.T, br *capsulev1beta2.BreakRequest) {
+				assert.Equal(t, capsulev1beta2.RequestPhaseFailed, br.Status.Phase)
+				ready := findCondition(br.Status.Conditions, meta.ReadyCondition)
+				require.NotNil(t, ready)
+				assert.Equal(t, v1.ConditionFalse, ready.Status)
+				assert.Equal(t, resourceDryRunFailedReason, ready.Reason)
+				assert.Equal(t, "service account cannot patch ConfigMaps", ready.Message)
+			},
+		},
+		{
+			name: "successful preflight retry returns to review",
+			br: &capsulev1beta2.BreakRequest{
+				ObjectMeta: v1.ObjectMeta{Name: resourceName, Namespace: "default"},
+				Status: capsulev1beta2.BreakRequestStatus{
+					Phase: capsulev1beta2.RequestPhaseRetrying,
+					Failure: &capsulev1beta2.BreakRequestFailure{
+						Stage:      capsulev1beta2.RequestFailureStagePreflight,
+						RetryPhase: capsulev1beta2.RequestPhaseRequested,
+						Reason:     resourceDryRunFailedReason,
+						Message:    "forbidden",
+					},
+					Request: &capsulev1beta2.BreakRequestStatusRequest{Resources: []apiruntime.RenderedResource{{
+						Targets: []runtime.RawExtension{mtConfigMapRendered},
+					}}},
+				},
+			},
+			mocks: func(cl *mc.MockClient, scl *mc.MockSubResourceWriter) {
+				cl.EXPECT().Get(gm.Any(), gm.Any(), matchBr).Return(nil)
+				cl.EXPECT().Get(gm.Any(), gm.Any(), matchUs).
+					Return(apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, "test-configmap"))
+				cl.EXPECT().Patch(gm.Any(), matchUs, gm.Any(), gm.Any(), gm.Any()).Return(nil)
+				scl.EXPECT().Update(gm.Any(), matchBr, gm.Any()).Return(nil)
+			},
+			verify: func(t *testing.T, br *capsulev1beta2.BreakRequest) {
+				assert.Equal(t, capsulev1beta2.RequestPhaseRequested, br.Status.Phase)
+				assert.Nil(t, br.Status.Failure)
+				assert.Empty(t, br.Status.ProcessedItems)
+				ready := findCondition(br.Status.Conditions, meta.ReadyCondition)
+				require.NotNil(t, ready)
+				assert.Equal(t, v1.ConditionTrue, ready.Status)
+			},
 		},
 		{
 			name: "approved but not yet to start",
@@ -211,15 +334,13 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 							Status:             v1.ConditionTrue,
 							Type:               meta.ReadyCondition,
 						},
-						{
-							LastTransitionTime: v1.Now(),
-							Message:            "Access request approved",
-							Reason:             "ApprovedByUser",
-							Status:             "True",
-							Type:               "Approved",
-						},
 					},
-					Approved: &capsulev1beta2.ApprovedProperties{
+					Transitions: []capsulev1beta2.BreakRequestTransition{{
+						Type:      capsulev1beta2.RequestPhaseApproved,
+						Timestamp: v1.Now(),
+						Reason:    "ApprovedByUser",
+					}},
+					Request: &capsulev1beta2.BreakRequestStatusRequest{
 						StartTime: ptr.To(v1.NewTime(time.Now().Add(time.Hour))),
 					},
 				},
@@ -232,14 +353,9 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 			},
 			verify: func(t *testing.T, br *capsulev1beta2.BreakRequest) {
 				assert.Equal(t, capsulev1beta2.RequestPhaseApproved, br.Status.Phase)
-				found := false
-				for _, c := range br.Status.Conditions {
-					if c.Type == "Approved" {
-						found = true
-						break
-					}
-				}
-				assert.True(t, found)
+				approved := br.LatestTransition(capsulev1beta2.RequestPhaseApproved)
+				require.NotNil(t, approved)
+				assert.Equal(t, "ApprovedByUser", approved.Reason)
 			},
 		},
 		{
@@ -266,15 +382,13 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 							Status:             v1.ConditionTrue,
 							Type:               meta.ReadyCondition,
 						},
-						{
-							LastTransitionTime: v1.Now(),
-							Message:            "Access request approved",
-							Reason:             "ApprovedByUser",
-							Status:             "True",
-							Type:               "Approved",
-						},
 					},
-					Approved: &capsulev1beta2.ApprovedProperties{
+					Transitions: []capsulev1beta2.BreakRequestTransition{{
+						Type:      capsulev1beta2.RequestPhaseApproved,
+						Timestamp: v1.Now(),
+						Reason:    "ApprovedByUser",
+					}},
+					Request: &capsulev1beta2.BreakRequestStatusRequest{
 						StartTime: ptr.To(v1.Now()),
 						Resources: []apiruntime.RenderedResource{{
 							Targets: []runtime.RawExtension{mtConfigMapRendered},
@@ -294,9 +408,9 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 			},
 			verify: func(t *testing.T, br *capsulev1beta2.BreakRequest) {
 				assert.Equal(t, capsulev1beta2.RequestPhaseActive, br.Status.Phase)
-				require.NotNil(t, br.Status.Approved)
-				assert.Len(t, br.Status.Approved.Resources, 1)
-				assert.Len(t, br.Status.Approved.Resources[0].Targets, 1)
+				require.NotNil(t, br.Status.Request)
+				assert.Len(t, br.Status.Request.Resources, 1)
+				assert.Len(t, br.Status.Request.Resources[0].Targets, 1)
 				assert.Equal(t, uint(1), br.Status.Size)
 				require.Len(t, br.Status.ProcessedItems, 1)
 
@@ -309,20 +423,11 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 				assert.True(t, managed.Created)
 				assert.False(t, managed.ClusterScoped)
 
-				foundApproved := false
-				foundActive := false
-				for _, c := range br.Status.Conditions {
-					if c.Type == "Approved" {
-						foundApproved = true
-					}
-					if c.Type == "Active" {
-						foundActive = true
-					}
-				}
-				assert.True(t, foundApproved)
-				assert.True(t, foundActive)
+				require.Len(t, br.Status.Transitions, 2)
+				assert.Equal(t, capsulev1beta2.RequestPhaseApproved, br.Status.Transitions[0].Type)
+				assert.Equal(t, capsulev1beta2.RequestPhaseActive, br.Status.Transitions[1].Type)
 
-				obj := br.Status.Approved.Resources[0].Targets[0].Object
+				obj := br.Status.Request.Resources[0].Targets[0].Object
 				co, ok := obj.(client.Object)
 				assert.True(t, ok)
 				assert.Empty(t, co.GetOwnerReferences())
@@ -352,7 +457,7 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 						Status:             v1.ConditionTrue,
 						Type:               meta.ReadyCondition,
 					}},
-					Approved: &capsulev1beta2.ApprovedProperties{
+					Request: &capsulev1beta2.BreakRequestStatusRequest{
 						StartTime: ptr.To(v1.Now()),
 						Resources: []apiruntime.RenderedResource{{
 							Targets: []runtime.RawExtension{mtConfigMapRendered},
@@ -370,7 +475,10 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 				scl.EXPECT().Update(gm.Any(), matchBr, gm.Any()).Return(nil)
 			},
 			verify: func(t *testing.T, br *capsulev1beta2.BreakRequest) {
-				assert.Equal(t, capsulev1beta2.RequestPhaseApproved, br.Status.Phase)
+				assert.Equal(t, capsulev1beta2.RequestPhaseFailed, br.Status.Phase)
+				require.NotNil(t, br.Status.Failure)
+				assert.Equal(t, capsulev1beta2.RequestFailureStageActivation, br.Status.Failure.Stage)
+				assert.Equal(t, capsulev1beta2.RequestPhaseApproved, br.Status.Failure.RetryPhase)
 				assert.Equal(t, uint(1), br.Status.Size)
 				require.Len(t, br.Status.ProcessedItems, 1)
 				assert.Equal(t, v1.ConditionFalse, br.Status.ProcessedItems[0].Status)
@@ -416,6 +524,123 @@ func TestBreakRequestReconciler_reconcile(t *testing.T) {
 			if tt.verify != nil {
 				tt.verify(t, tt.br)
 			}
+		})
+	}
+}
+
+func TestRecordTransitionEventOnce(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		phase         capsulev1beta2.RequestPhase
+		reason        string
+		action        string
+		message       string
+		expectedEvent string
+	}{
+		{
+			name:          "approval",
+			phase:         capsulev1beta2.RequestPhaseApproved,
+			reason:        evt.ReasonBreakRequestApproved,
+			action:        evt.ActionApproved,
+			message:       "Access request approved by alice",
+			expectedEvent: "Normal BreakRequestApproved Access request approved by alice",
+		},
+		{
+			name:          "denial",
+			phase:         capsulev1beta2.RequestPhaseDenied,
+			reason:        evt.ReasonBreakRequestDenied,
+			action:        evt.ActionDenied,
+			message:       "Access request denied by alice",
+			expectedEvent: "Normal BreakRequestDenied Access request denied by alice",
+		},
+		{
+			name:          "expiration",
+			phase:         capsulev1beta2.RequestPhaseExpired,
+			reason:        evt.ReasonBreakRequestExpired,
+			action:        evt.ActionExpired,
+			message:       "Access request expired by alice",
+			expectedEvent: "Normal BreakRequestExpired Access request expired by alice",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			recorder := events.NewFakeRecorder(2)
+			br := &capsulev1beta2.BreakRequest{
+				ObjectMeta: v1.ObjectMeta{Name: "temporary-access", Namespace: "team-a"},
+				Status: capsulev1beta2.BreakRequestStatus{
+					Phase: testCase.phase,
+					Transitions: []capsulev1beta2.BreakRequestTransition{{
+						Type:      testCase.phase,
+						Timestamp: v1.Now(),
+						Actor: capsulev1beta2.BreakRequestTransitionActor{
+							Name: "alice",
+							Type: breaktheglass.AccessEntityTypeUser,
+						},
+						Reason:  string(testCase.phase) + "ByUser",
+						Message: testCase.message,
+					}},
+				},
+			}
+			r := &BreakRequestReconciler{recorder: recorder}
+
+			r.recordTransitionEvent(br, testCase.phase, testCase.reason, testCase.action)
+			r.recordTransitionEvent(br, testCase.phase, testCase.reason, testCase.action)
+
+			transition := br.LatestTransition(testCase.phase)
+			require.NotNil(t, transition)
+			assert.NotNil(t, transition.EventTime)
+
+			select {
+			case event := <-recorder.Events:
+				assert.Equal(t, testCase.expectedEvent, event)
+			default:
+				t.Fatal("expected lifecycle event")
+			}
+
+			select {
+			case event := <-recorder.Events:
+				t.Fatalf("unexpected duplicate lifecycle event: %s", event)
+			default:
+			}
+		})
+	}
+}
+
+func TestDefaultTargetNamespace(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		target   string
+		request  string
+		expected string
+	}{
+		{
+			name:     "defaults omitted namespace",
+			request:  "request-namespace",
+			expected: "request-namespace",
+		},
+		{
+			name:     "preserves rendered namespace",
+			target:   "selected-namespace",
+			request:  "request-namespace",
+			expected: "selected-namespace",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			obj := &unstructured.Unstructured{}
+			obj.SetNamespace(tt.target)
+			defaultTargetNamespace(obj, tt.request)
+			assert.Equal(t, tt.expected, obj.GetNamespace())
 		})
 	}
 }

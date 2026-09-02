@@ -84,6 +84,10 @@ func (b *breakRequestValidationHandler) OnCreate(_ client.Client, reader client.
 		}
 
 		templateData := brt.TemplateData()
+		if err := br.ValidateParameters(templateData.ParamSchema); err != nil { //nolint:contextcheck // schema validation has no context-aware public API
+			return ad.Denyf("parameters for template %s are invalid: %v", templateName, err)
+		}
+
 		if templateData.MaxDuration != nil && templateData.MaxDuration.Duration > 0 &&
 			br.Spec.Duration != nil &&
 			br.Spec.Duration.Duration > templateData.MaxDuration.Duration {
@@ -122,15 +126,21 @@ func (b *breakRequestValidationHandler) OnDelete(
 			return nil
 		}
 
-		if br.Status.Phase == capsulev1beta2.RequestPhaseRequested ||
+		if br.Status.Phase == capsulev1beta2.RequestPhaseCreated ||
+			br.Status.Phase == capsulev1beta2.RequestPhaseRequested ||
 			br.Status.Phase == capsulev1beta2.RequestPhasePending {
 			return nil
 		}
 
 		if br.Status.Phase != capsulev1beta2.RequestPhaseExpired {
+			phase := string(br.Status.Phase)
+			if phase == "" {
+				phase = "Initializing"
+			}
+
 			return ad.Denyf(
 				"BreakRequest cannot be deleted before it has expired (current phase: %s)",
-				br.Status.Phase,
+				phase,
 			)
 		}
 
@@ -170,20 +180,26 @@ func (b *breakRequestValidationHandler) OnUpdate(_ client.Client, reader client.
 
 		if req.SubResource == "status" &&
 			!users.IsControllerServiceAccount(req.UserInfo.Username) &&
-			!reflect.DeepEqual(approvedResources(oldBr), approvedResources(newBr)) {
+			!reflect.DeepEqual(requestResources(oldBr), requestResources(newBr)) {
 			return ad.Deny("rendered resources can only be changed by the Capsule controller")
 		}
 
 		if req.SubResource == "status" &&
 			!users.IsControllerServiceAccount(req.UserInfo.Username) &&
-			!reflect.DeepEqual(oldBr.Status.ServiceAccount, newBr.Status.ServiceAccount) {
+			!reflect.DeepEqual(requestImpersonation(oldBr), requestImpersonation(newBr)) {
 			return ad.Deny("resolved impersonation can only be changed by the Capsule controller")
 		}
 
 		if req.SubResource == "status" &&
 			!users.IsControllerServiceAccount(req.UserInfo.Username) &&
-			!reflect.DeepEqual(oldBr.Status.Template, newBr.Status.Template) {
+			!reflect.DeepEqual(resolvedRequestTemplate(oldBr), resolvedRequestTemplate(newBr)) {
 			return ad.Deny("resolved template can only be changed by the Capsule controller")
+		}
+
+		if req.SubResource == "status" &&
+			!users.IsControllerServiceAccount(req.UserInfo.Username) &&
+			!reflect.DeepEqual(requestApprovals(oldBr), requestApprovals(newBr)) {
+			return ad.Deny("resolved approvals can only be changed by the Capsule controller")
 		}
 
 		if req.SubResource == "status" &&
@@ -210,12 +226,36 @@ func (b *breakRequestValidationHandler) administrators() rbac.UserListSpec {
 	return b.configuration.Administrators()
 }
 
-func approvedResources(br *capsulev1beta2.BreakRequest) []apiruntime.RenderedResource {
-	if br.Status.Approved == nil {
+func requestResources(br *capsulev1beta2.BreakRequest) []apiruntime.RenderedResource {
+	if br.Status.Request == nil {
 		return nil
 	}
 
-	return br.Status.Approved.Resources
+	return br.Status.Request.Resources
+}
+
+func requestImpersonation(br *capsulev1beta2.BreakRequest) *meta.NamespacedRFC1123ObjectReferenceWithNamespace {
+	if br.Status.Request == nil {
+		return nil
+	}
+
+	return br.Status.Request.Impersonation
+}
+
+func resolvedRequestTemplate(br *capsulev1beta2.BreakRequest) *capsulev1beta2.ResolvedBreakRequestTemplateReference {
+	if br.Status.Request == nil {
+		return nil
+	}
+
+	return br.Status.Request.Template
+}
+
+func requestApprovals(br *capsulev1beta2.BreakRequest) *breaktheglass.ApprovalSpec {
+	if br.Status.Request == nil {
+		return nil
+	}
+
+	return br.Status.Request.Approvals
 }
 
 func (b *breakRequestValidationHandler) validateApproval(
@@ -235,6 +275,11 @@ func (b *breakRequestValidationHandler) validateApproval(
 		return ad.Denyf("cannot approve BreakRequest: %s", message)
 	}
 
+	automaticApproval := users.IsControllerServiceAccount(req.UserInfo.Username) &&
+		newBr.Status.Review != nil &&
+		newBr.Status.Review.Reviewer != nil &&
+		newBr.Status.Review.Reviewer.Type == breaktheglass.AccessEntityTypeSystem
+
 	brt, err := loadBreakRequestTemplate(ctx, reader, newBr)
 	if err != nil {
 		return ad.ErroredResponse(fmt.Errorf(
@@ -244,12 +289,8 @@ func (b *breakRequestValidationHandler) validateApproval(
 		))
 	}
 
-	automaticApproval := users.IsControllerServiceAccount(req.UserInfo.Username) &&
-		newBr.Status.Review != nil &&
-		newBr.Status.Review.Reviewer != nil &&
-		newBr.Status.Review.Reviewer.Type == breaktheglass.AccessEntityTypeSystem
-
-	if !automaticApproval && !brt.TemplateData().Approvals.IsApprover(req.UserInfo.Username, req.UserInfo.Groups) {
+	approvals := newBr.ApprovalPolicy(brt)
+	if !automaticApproval && !approvals.IsApprover(req.UserInfo.Username, req.UserInfo.Groups) {
 		return ad.Denyf(
 			"subject %q is not permitted to approve requests for template %s",
 			req.UserInfo.Username,
@@ -257,7 +298,7 @@ func (b *breakRequestValidationHandler) validateApproval(
 		)
 	}
 
-	if err := brt.CheckApprovalConditions(ctx, newBr); err != nil {
+	if err := newBr.CheckApprovalConditions(ctx, brt); err != nil {
 		return ad.Denyf(
 			"approval conditions not satisfied for template %s: %v",
 			newBr.Spec.Template.Name,
@@ -265,8 +306,8 @@ func (b *breakRequestValidationHandler) validateApproval(
 		)
 	}
 
-	if err := newBr.ResolveApprovedProperties(brt); err != nil {
-		return ad.Denyf("approved properties are invalid: %v", err)
+	if err := newBr.ResolveRequestStatus(brt); err != nil {
+		return ad.Denyf("request properties are invalid: %v", err)
 	}
 
 	return nil

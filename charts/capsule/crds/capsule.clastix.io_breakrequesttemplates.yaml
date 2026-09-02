@@ -20,6 +20,10 @@ spec:
     - jsonPath: .spec.approvals.auto
       name: AutoApprove
       type: boolean
+    - description: Age
+      jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
     name: v1beta2
     schema:
       openAPIV3Schema:
@@ -270,8 +274,10 @@ spec:
                           type: boolean
                       type: object
                     targets:
-                      description: Targets are Kubernetes resource objects to render
-                        and manage with Policy.
+                      description: |-
+                        Targets are Kubernetes resource objects to render and manage with Policy.
+                        Parameters and loaded context use the flat template root; trusted request
+                        metadata is available under .request.
                       items:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
@@ -282,7 +288,8 @@ spec:
                         Template is an optional Go template which may render one or more YAML or
                         JSON Kubernetes resources separated by YAML document markers. Request
                         parameters are available under .params and loaded resources under
-                        .context.resources.
+                        .context.resources. Trusted request metadata is available under .request
+                        with name, username, groups, and timestamp fields.
                       minLength: 1
                       type: string
                   type: object

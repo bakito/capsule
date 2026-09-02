@@ -75,6 +75,7 @@ type GlobalBreakRequestTemplateStatus struct {
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="AutoApprove",type=boolean,JSONPath=`.spec.approvals.auto`
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Age"
 
 // GlobalBreakRequestTemplate is the Schema for the globalbreakrequesttemplates API.
 type GlobalBreakRequestTemplate struct {
