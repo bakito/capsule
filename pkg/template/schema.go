@@ -184,7 +184,9 @@ func compileJSONSchema(schemaBytes []byte) (*jsonschema.Schema, error) {
 	meta := "https://json-schema.org/draft/2020-12/schema"
 
 	c := jsonschema.NewCompiler()
+
 	c.Draft = jsonschema.Draft2020
+
 	if err := c.AddResource("meta.json", bytes.NewReader([]byte(`{"$ref":"`+meta+`"}`))); err != nil {
 		return nil, err
 	}

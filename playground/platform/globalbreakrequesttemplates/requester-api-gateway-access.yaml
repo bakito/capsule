@@ -28,11 +28,11 @@ spec:
   keepFor: 7d
 
   approvals:
-    #auto: true
+    # auto: true
     approvers:
       - kind: User
         name: "kubernetes-admin"
-    #conditions: # CEL
+    # conditions: # CEL
     #  - "requestor.name == 'Timmy' || requestor.name == 'Alice'"
 
   paramSchema:
