@@ -20,7 +20,7 @@ const (
 	ReleaseAnnotation        = "projectcapsule.dev/release"
 	ReleaseAnnotationTrigger = "true"
 
-	ReconcileAnnotation               = "reconcile.projectcapsule.dev/requestedAt"
+	ReconcileAnnotation                = "reconcile.projectcapsule.dev/requestedAt"
 	ResourceLeaseActiveUntilAnnotation = "projectcapsule.dev/active-until"
 	// ResourceLeaseServiceAccountAnnotation records the identity allowed to
 	// reconcile a resource protected by an active ResourceLease.

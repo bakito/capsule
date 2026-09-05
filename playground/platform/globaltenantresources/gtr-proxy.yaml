@@ -65,4 +65,3 @@ spec:
                   selector:
                     matchLabels:
                       company.com/consumer: "tenants"
-

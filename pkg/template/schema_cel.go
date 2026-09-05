@@ -57,6 +57,7 @@ func validateKubernetesValidationExtensions(schemaData []byte) error {
 		}
 
 		var rules apiextensionsv1.ValidationRules
+
 		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.DisallowUnknownFields()
 
@@ -275,8 +276,7 @@ func countStructuralKubernetesValidationRules(schema *structuralschema.Structura
 	}
 
 	for _, property := range schema.Properties {
-		property := property
-		count += countStructuralKubernetesValidationRules(&property)
+		count += countStructuralKubernetesValidationRules(new(property))
 	}
 
 	if schema.ValueValidation != nil {
