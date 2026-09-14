@@ -23,27 +23,63 @@ import (
 	"github.com/projectcapsule/capsule/pkg/users"
 )
 
-func TestRulesMetadataHandlerSkipsFinalize(t *testing.T) {
+func TestRulesMetadataHandlerValidatesFinalizeMetadata(t *testing.T) {
 	t.Parallel()
 
-	handler := RulesMetadataHandler(nil, nil)
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core API to scheme: %v", err)
+	}
+	if err := capsulev1beta2.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Capsule API to scheme: %v", err)
+	}
+
+	tnt := &capsulev1beta2.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "solar"}}
+	tnt.Spec.Rules = []*rules.NamespaceRuleBodyTenant{{
+		NamespaceRuleBodyNamespace: &rules.NamespaceRuleBodyNamespace{
+			Enforce: &rules.NamespaceRuleEnforceBody{
+				Action: rules.ActionTypeAllow,
+				Metadata: []rules.MetadataRule{{
+					VersionKinds: apiruntime.VersionKinds{APIGroups: []string{"v1"}, Kinds: []string{"Namespace"}},
+					Labels: map[string]rules.MetadataValueRule{
+						"pod-security.kubernetes.io/enforce": {
+							Required: true,
+							Values:   []apiruntime.ExpressionMatch{{Exact: []string{"restricted", "baseline"}}},
+						},
+					},
+				}},
+			},
+		},
+	}}
+
+	oldNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "solar-system",
+		Labels: map[string]string{"pod-security.kubernetes.io/enforce": "baseline"},
+	}}
+	newNs := oldNs.DeepCopy()
+	newNs.Labels["pod-security.kubernetes.io/enforce"] = "privileged"
+
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	recorder := events.NewEventRecorder(nil, logr.Discard(), nil, nil)
+	handler := RulesMetadataHandler(cache.NewRegexCache(), nil)
 	request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Kind:        metav1.GroupVersionKind{Version: "v1", Kind: "Namespace"},
 		Operation:   admissionv1.Update,
 		SubResource: "finalize",
 	}}
 
 	response := handler.OnUpdate(
-		nil,
-		nil,
+		client,
+		client,
 		users.AdmissionUser{},
+		newNs,
+		oldNs,
 		nil,
-		nil,
-		nil,
-		nil,
-		nil,
+		recorder,
+		tnt,
 	)(context.Background(), request)
-	if response != nil {
-		t.Fatalf("OnUpdate() response = %#v, want nil", response)
+	if response == nil || response.Allowed {
+		t.Fatalf("OnUpdate() response = %#v, want metadata injection denied", response)
 	}
 }
 
