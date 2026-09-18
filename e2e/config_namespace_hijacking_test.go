@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -20,8 +21,11 @@ import (
 	"k8s.io/utils/ptr"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
+	"github.com/projectcapsule/capsule/pkg/api"
 	"github.com/projectcapsule/capsule/pkg/api/meta"
 	"github.com/projectcapsule/capsule/pkg/api/rbac"
+	"github.com/projectcapsule/capsule/pkg/api/rules"
+	apiruntime "github.com/projectcapsule/capsule/pkg/api/runtime"
 	clt "github.com/projectcapsule/capsule/pkg/runtime/client"
 	"github.com/projectcapsule/capsule/pkg/tenant"
 )
@@ -104,6 +108,68 @@ var _ = Describe("creating several Namespaces for a Tenant", Ordered, Label("con
 						UserSpec: rbac.UserSpec{
 							Name: "different-owner",
 							Kind: "User",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	const (
+		forbiddenLabel      = "pod-security.kubernetes.io/enforce"
+		forbiddenAnnotation = "attacker.example.com/annotation"
+		ruleDeniedLabel     = "attacker.example.com/rules-denied"
+		profileLabel        = "attacker.example.com/profile"
+		probeLabel          = "attacker.example.com/touched"
+	)
+
+	// t4 carries the namespace-level controls a tenant user must not defeat
+	// through the namespaces/status and namespaces/finalize subresources:
+	// legacy forbidden metadata and a spec.rules metadata profile selecting
+	// only namespaces labelled with a restricted profile.
+	t4 := &capsulev1beta2.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "e2e-ns-attack-4",
+			Labels: map[string]string{"env": "e2e"},
+		},
+		Spec: capsulev1beta2.TenantSpec{
+			Owners: rbac.OwnerListSpec{
+				{
+					CoreOwnerSpec: rbac.CoreOwnerSpec{
+						UserSpec: rbac.UserSpec{
+							Name: "gatsby",
+							Kind: "User",
+						},
+					},
+				},
+			},
+			NamespaceOptions: &capsulev1beta2.NamespaceOptions{
+				ForbiddenLabels: api.ForbiddenListSpec{
+					Exact: []string{forbiddenLabel},
+				},
+				ForbiddenAnnotations: api.ForbiddenListSpec{
+					Exact: []string{forbiddenAnnotation},
+				},
+			},
+			Rules: []*rules.NamespaceRuleBodyTenant{
+				{
+					NamespaceSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{profileLabel: "restricted"},
+					},
+					NamespaceRuleBodyNamespace: &rules.NamespaceRuleBodyNamespace{
+						Enforce: &rules.NamespaceRuleEnforceBody{
+							Action: rules.ActionTypeDeny,
+							Metadata: []rules.MetadataRule{
+								{
+									VersionKinds: apiruntime.VersionKinds{
+										APIGroups: []string{"v1"},
+										Kinds:     []string{"Namespace"},
+									},
+									Labels: map[string]rules.MetadataValueRule{
+										ruleDeniedLabel: {},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -319,7 +385,7 @@ var _ = Describe("creating several Namespaces for a Tenant", Ordered, Label("con
 	})
 
 	JustBeforeEach(func() {
-		waitForTenantNamespacesDeletion(t1.Name, t2.Name, t3.Name)
+		waitForTenantNamespacesDeletion(t1.Name, t2.Name, t3.Name, t4.Name)
 
 		EventuallyCreation(func() error {
 			t1.ResourceVersion = ""
@@ -342,13 +408,302 @@ var _ = Describe("creating several Namespaces for a Tenant", Ordered, Label("con
 		}).Should(Succeed())
 		TenantReady(t3, metav1.ConditionTrue, defaultTimeoutInterval)
 
+		EventuallyCreation(func() error {
+			t4.ResourceVersion = ""
+
+			return k8sClient.Create(context.TODO(), t4)
+		}).Should(Succeed())
+		TenantReady(t4, metav1.ConditionTrue, defaultTimeoutInterval)
 	})
 
 	JustAfterEach(func() {
 		EventuallyDeletion(t1)
 		EventuallyDeletion(t2)
 		EventuallyDeletion(t3)
-		waitForTenantNamespacesDeletion(t1.Name, t2.Name, t3.Name)
+		EventuallyDeletion(t4)
+		waitForTenantNamespacesDeletion(t1.Name, t2.Name, t3.Name, t4.Name)
+	})
+
+	// subresourceWriter is a namespace subresource update path a tenant user
+	// may hold RBAC for. Both must be admitted like plain namespace updates.
+	type subresourceWriter struct {
+		name  string
+		write func(context.Context, *corev1.Namespace) (*corev1.Namespace, error)
+	}
+
+	namespaceSubresourceWriters := func(owner rbac.UserSpec) []subresourceWriter {
+		cs := ownerClient(owner)
+
+		return []subresourceWriter{
+			{
+				name: "namespaces/status",
+				write: func(ctx context.Context, ns *corev1.Namespace) (*corev1.Namespace, error) {
+					return cs.CoreV1().Namespaces().UpdateStatus(ctx, ns, metav1.UpdateOptions{})
+				},
+			},
+			{
+				name: "namespaces/finalize",
+				write: func(ctx context.Context, ns *corev1.Namespace) (*corev1.Namespace, error) {
+					return cs.CoreV1().Namespaces().Finalize(ctx, ns, metav1.UpdateOptions{})
+				},
+			},
+		}
+	}
+
+	// writeNamespaceMetadata re-reads the namespace with the administrator
+	// client, applies mutate and submits it through the given subresource.
+	writeNamespaceMetadata := func(writer subresourceWriter, nsName string, mutate func(*corev1.Namespace)) error {
+		current := getNamespace(nsName)
+		payload := current.DeepCopy()
+
+		if payload.Labels == nil {
+			payload.Labels = map[string]string{}
+		}
+
+		if payload.Annotations == nil {
+			payload.Annotations = map[string]string{}
+		}
+
+		mutate(payload)
+
+		_, err := writer.write(context.TODO(), payload)
+
+		return err
+	}
+
+	expectSubresourceDenied := func(writer subresourceWriter, err error, reason string) {
+		Expect(err).To(HaveOccurred(), "%s write must be rejected", writer.name)
+		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "%s write must be denied by admission: %v", writer.name, err)
+		Expect(err).To(MatchError(ContainSubstring(reason)), "%s write denied for an unexpected reason", writer.name)
+	}
+
+	expectNamespaceLabelAbsent := func(nsName, key string) {
+		Expect(getNamespace(nsName).Labels).NotTo(HaveKey(key), "denied label must not be persisted on %q", nsName)
+	}
+
+	expectNamespaceAnnotationAbsent := func(nsName, key string) {
+		Expect(getNamespace(nsName).Annotations).NotTo(HaveKey(key), "denied annotation must not be persisted on %q", nsName)
+	}
+
+	It("Owners can not bypass forbidden namespace metadata through namespaces/status or namespaces/finalize", func() {
+		tnt := getTenant(t4.Name)
+		owner := t4.Spec.Owners[0].UserSpec
+
+		grantName := "e2e-ns-subresource-forbidden-metadata"
+		grantNamespaceSubresourceUpdate(grantName, rbacv1.Subject{
+			APIGroup: rbacv1.GroupName,
+			Kind:     rbacv1.UserKind,
+			Name:     owner.Name,
+		})
+		DeferCleanup(func() {
+			cleanupNamespaceSubresourceGrant(grantName)
+		})
+
+		ns := NewNamespace("", map[string]string{meta.TenantLabel: tnt.GetName()})
+		NamespaceCreation(ns, owner, defaultTimeoutInterval).Should(Succeed())
+		NamespaceIsPartOfTenant(t4, ns).Should(Succeed())
+
+		for _, writer := range namespaceSubresourceWriters(owner) {
+			By(fmt.Sprintf("rejecting a forbidden label through %s", writer.name))
+			err := writeNamespaceMetadata(writer, ns.Name, func(payload *corev1.Namespace) {
+				payload.Labels[forbiddenLabel] = "privileged"
+			})
+			expectSubresourceDenied(writer, err, "is forbidden for the current Tenant")
+			expectNamespaceLabelAbsent(ns.Name, forbiddenLabel)
+
+			By(fmt.Sprintf("rejecting a forbidden annotation through %s", writer.name))
+			err = writeNamespaceMetadata(writer, ns.Name, func(payload *corev1.Namespace) {
+				payload.Annotations[forbiddenAnnotation] = "true"
+			})
+			expectSubresourceDenied(writer, err, "is forbidden for the current Tenant")
+			expectNamespaceAnnotationAbsent(ns.Name, forbiddenAnnotation)
+
+			By(fmt.Sprintf("allowing compliant metadata through %s", writer.name))
+			allowedLabel := probeLabel + "-" + strings.TrimPrefix(writer.name, "namespaces/")
+			Eventually(func() error {
+				return writeNamespaceMetadata(writer, ns.Name, func(payload *corev1.Namespace) {
+					payload.Labels[allowedLabel] = "true"
+				})
+			}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+
+			Eventually(func(g Gomega) {
+				g.Expect(getNamespace(ns.Name).Labels).To(HaveKeyWithValue(allowedLabel, "true"))
+			}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+		}
+
+		expectOriginalTenantOwnership(ns.Name, tnt)
+	})
+
+	It("Owners can not bypass namespace rule metadata profiles through namespaces/finalize", func() {
+		tnt := getTenant(t4.Name)
+		owner := t4.Spec.Owners[0].UserSpec
+
+		grantName := "e2e-ns-subresource-rules-metadata"
+		grantNamespaceSubresourceUpdate(grantName, rbacv1.Subject{
+			APIGroup: rbacv1.GroupName,
+			Kind:     rbacv1.UserKind,
+			Name:     owner.Name,
+		})
+		DeferCleanup(func() {
+			cleanupNamespaceSubresourceGrant(grantName)
+		})
+
+		restricted := NewNamespace("", map[string]string{
+			meta.TenantLabel: tnt.GetName(),
+			profileLabel:     "restricted",
+		})
+		NamespaceCreation(restricted, owner, defaultTimeoutInterval).Should(Succeed())
+		NamespaceIsPartOfTenant(t4, restricted).Should(Succeed())
+
+		unselected := NewNamespace("", map[string]string{meta.TenantLabel: tnt.GetName()})
+		NamespaceCreation(unselected, owner, defaultTimeoutInterval).Should(Succeed())
+		NamespaceIsPartOfTenant(t4, unselected).Should(Succeed())
+
+		for _, writer := range namespaceSubresourceWriters(owner) {
+			probeValue := strings.TrimPrefix(writer.name, "namespaces/")
+
+			By(fmt.Sprintf("rejecting the rule-denied label on the selected profile through %s", writer.name))
+			err := writeNamespaceMetadata(writer, restricted.Name, func(payload *corev1.Namespace) {
+				payload.Labels[ruleDeniedLabel] = "true"
+			})
+			expectSubresourceDenied(writer, err, "denied by namespace rule")
+			expectNamespaceLabelAbsent(restricted.Name, ruleDeniedLabel)
+
+			By(fmt.Sprintf("allowing the same label on a non-selected namespace through %s", writer.name))
+			Eventually(func() error {
+				return writeNamespaceMetadata(writer, unselected.Name, func(payload *corev1.Namespace) {
+					payload.Labels[ruleDeniedLabel] = probeValue
+				})
+			}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+
+			Eventually(func(g Gomega) {
+				g.Expect(getNamespace(unselected.Name).Labels).To(HaveKeyWithValue(ruleDeniedLabel, probeValue))
+			}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+		}
+
+		By("rejecting the rule-denied label once the namespace joins the restricted profile")
+		Eventually(func() error {
+			_, err := ownerClient(owner).CoreV1().Namespaces().Patch(
+				context.TODO(),
+				unselected.Name,
+				types.MergePatchType,
+				[]byte(fmt.Sprintf(`{"metadata":{"labels":{"%s":null,"%s":"restricted"}}}`, ruleDeniedLabel, profileLabel)),
+				metav1.PatchOptions{},
+			)
+
+			return err
+		}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+
+		for _, writer := range namespaceSubresourceWriters(owner) {
+			err := writeNamespaceMetadata(writer, unselected.Name, func(payload *corev1.Namespace) {
+				payload.Labels[ruleDeniedLabel] = "true"
+			})
+			expectSubresourceDenied(writer, err, "denied by namespace rule")
+			expectNamespaceLabelAbsent(unselected.Name, ruleDeniedLabel)
+		}
+	})
+
+	It("Owners can not write namespace metadata of a cordoned Tenant through namespaces/finalize", func() {
+		tnt := getTenant(t4.Name)
+		owner := t4.Spec.Owners[0].UserSpec
+
+		grantName := "e2e-ns-subresource-cordoned"
+		grantNamespaceSubresourceUpdate(grantName, rbacv1.Subject{
+			APIGroup: rbacv1.GroupName,
+			Kind:     rbacv1.UserKind,
+			Name:     owner.Name,
+		})
+		DeferCleanup(func() {
+			cleanupNamespaceSubresourceGrant(grantName)
+		})
+
+		ns := NewNamespace("", map[string]string{meta.TenantLabel: tnt.GetName()})
+		NamespaceCreation(ns, owner, defaultTimeoutInterval).Should(Succeed())
+		NamespaceIsPartOfTenant(t4, ns).Should(Succeed())
+
+		UpdateTenantEventually(t4, func(current *capsulev1beta2.Tenant) {
+			current.Spec.Cordoned = true
+		})
+
+		for _, writer := range namespaceSubresourceWriters(owner) {
+			Eventually(func(g Gomega) {
+				err := writeNamespaceMetadata(writer, ns.Name, func(payload *corev1.Namespace) {
+					payload.Labels[probeLabel] = "true"
+				})
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(apierrors.IsForbidden(err)).To(BeTrue(), "%s write must be denied by admission: %v", writer.name, err)
+				g.Expect(err).To(MatchError(ContainSubstring("cordoned")))
+			}, defaultTimeoutInterval, defaultPollInterval).Should(Succeed())
+
+			expectNamespaceLabelAbsent(ns.Name, probeLabel)
+		}
+
+		UpdateTenantEventually(t4, func(current *capsulev1beta2.Tenant) {
+			current.Spec.Cordoned = false
+		})
+	})
+
+	It("Owners can not write other Tenant namespace metadata through namespaces/status or namespaces/finalize", func() {
+		victim := getTenant(t3.Name)
+		attacker := t1.Spec.Owners[0].UserSpec
+
+		grantName := "e2e-ns-subresource-foreign-tenant"
+		grantNamespaceSubresourceUpdate(grantName, rbacv1.Subject{
+			APIGroup: rbacv1.GroupName,
+			Kind:     rbacv1.UserKind,
+			Name:     attacker.Name,
+		})
+		DeferCleanup(func() {
+			cleanupNamespaceSubresourceGrant(grantName)
+		})
+
+		ns := NewNamespace("", map[string]string{meta.TenantLabel: victim.GetName()})
+		NamespaceCreation(ns, t3.Spec.Owners[0].UserSpec, defaultTimeoutInterval).Should(Succeed())
+		NamespaceIsPartOfTenant(t3, ns).Should(Succeed())
+
+		for _, writer := range namespaceSubresourceWriters(attacker) {
+			err := writeNamespaceMetadata(writer, ns.Name, func(payload *corev1.Namespace) {
+				payload.Labels[probeLabel] = "true"
+				payload.Annotations[probeLabel] = "true"
+			})
+			expectSubresourceDenied(writer, err, "denied patch request for this namespace")
+			expectNamespaceLabelAbsent(ns.Name, probeLabel)
+			expectNamespaceAnnotationAbsent(ns.Name, probeLabel)
+		}
+
+		expectOriginalTenantOwnership(ns.Name, victim)
+	})
+
+	It("Owners can not write unmanaged namespace metadata through namespaces/status or namespaces/finalize", func() {
+		attacker := t1.Spec.Owners[0].UserSpec
+
+		grantName := "e2e-ns-subresource-unmanaged"
+		grantNamespaceSubresourceUpdate(grantName, rbacv1.Subject{
+			APIGroup: rbacv1.GroupName,
+			Kind:     rbacv1.UserKind,
+			Name:     attacker.Name,
+		})
+		DeferCleanup(func() {
+			cleanupNamespaceSubresourceGrant(grantName)
+		})
+
+		unmanaged := createUnmanagedNamespace()
+
+		for _, nsName := range []string{unmanaged.Name, kubeSystem.Name} {
+			for _, writer := range namespaceSubresourceWriters(attacker) {
+				By(fmt.Sprintf("rejecting metadata on %q through %s", nsName, writer.name))
+				err := writeNamespaceMetadata(writer, nsName, func(payload *corev1.Namespace) {
+					payload.Labels[probeLabel] = "true"
+					payload.Annotations[probeLabel] = "true"
+				})
+				expectSubresourceDenied(writer, err, "namespace is not owned by any tenant")
+				expectNamespaceLabelAbsent(nsName, probeLabel)
+				expectNamespaceAnnotationAbsent(nsName, probeLabel)
+			}
+
+			Expect(getNamespace(nsName).Labels).NotTo(HaveKey(meta.TenantLabel))
+			Expect(tenantOwnerReferences(getNamespace(nsName))).To(BeEmpty())
+		}
 	})
 
 	It("Owners can not hijack Tenant ownership through namespaces/status", func() {

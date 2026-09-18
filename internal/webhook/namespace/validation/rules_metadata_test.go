@@ -23,32 +23,23 @@ import (
 	"github.com/projectcapsule/capsule/pkg/users"
 )
 
-func TestRulesMetadataHandlerSkipsFinalize(t *testing.T) {
+// TestRulesMetadataHandlerValidatesSubresourceMetadata proves the rules
+// metadata engine is applied to every path carrying namespace metadata,
+// including the namespaces/status and namespaces/finalize subresources.
+func TestRulesMetadataHandlerValidatesSubresourceMetadata(t *testing.T) {
 	t.Parallel()
 
-	handler := RulesMetadataHandler(nil, nil)
-	request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
-		Operation:   admissionv1.Update,
-		SubResource: "finalize",
-	}}
+	for _, subresource := range []string{"", "status", "finalize"} {
+		t.Run("subresource="+subresource, func(t *testing.T) {
+			t.Parallel()
 
-	response := handler.OnUpdate(
-		nil,
-		nil,
-		users.AdmissionUser{},
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-	)(context.Background(), request)
-	if response != nil {
-		t.Fatalf("OnUpdate() response = %#v, want nil", response)
+			testRulesMetadataHandlerDeniesLabelInjection(t, subresource)
+		})
 	}
 }
 
-func TestRulesMetadataHandlerValidatesStatusMetadata(t *testing.T) {
-	t.Parallel()
+func testRulesMetadataHandlerDeniesLabelInjection(t *testing.T, subresource string) {
+	t.Helper()
 
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -89,7 +80,7 @@ func TestRulesMetadataHandlerValidatesStatusMetadata(t *testing.T) {
 	request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
 		Kind:        metav1.GroupVersionKind{Version: "v1", Kind: "Namespace"},
 		Operation:   admissionv1.Update,
-		SubResource: "status",
+		SubResource: subresource,
 	}}
 
 	response := handler.OnUpdate(
@@ -104,5 +95,19 @@ func TestRulesMetadataHandlerValidatesStatusMetadata(t *testing.T) {
 	)(context.Background(), request)
 	if response == nil || response.Allowed {
 		t.Fatalf("OnUpdate() response = %#v, want metadata injection denied", response)
+	}
+
+	unchanged := handler.OnUpdate(
+		client,
+		client,
+		users.AdmissionUser{},
+		oldNs.DeepCopy(),
+		oldNs,
+		nil,
+		recorder,
+		tnt,
+	)(context.Background(), request)
+	if unchanged != nil && !unchanged.Allowed {
+		t.Fatalf("OnUpdate() response = %#v, want compliant metadata allowed", unchanged)
 	}
 }

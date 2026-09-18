@@ -105,11 +105,12 @@ func (h *handler) OnUpdate(
 			return ad.ErroredResponse(err)
 		}
 
-		// Namespace finalization and terminating updates must never depend on
-		// Tenant resolution. The standard mutating rule excludes subresources,
-		// but retain this guard for custom webhook configurations.
-		if req.SubResource != "" ||
-			ns.DeletionTimestamp != nil ||
+		// Terminating namespaces must never depend on Tenant resolution to
+		// complete deletion. Subresource writes (status, finalize) against a
+		// live namespace carry the full metadata and are handled like any
+		// other update so the ownership gate sees the same requests as the
+		// validating webhook.
+		if ns.DeletionTimestamp != nil ||
 			oldNs.DeletionTimestamp != nil ||
 			ns.Status.Phase == corev1.NamespaceTerminating ||
 			oldNs.Status.Phase == corev1.NamespaceTerminating {

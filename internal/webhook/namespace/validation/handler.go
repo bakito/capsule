@@ -230,22 +230,25 @@ func namespaceTenantChanged(oldTenant, newTenant *capsulev1beta2.Tenant) bool {
 	return oldTenant.GetName() != newTenant.GetName() || oldTenant.GetUID() != newTenant.GetUID()
 }
 
-func isTerminatingNamespaceUpdate(
-	req admission.Request,
-	oldNs, newNs *corev1.Namespace,
-) bool {
-	return req.SubResource == "finalize" ||
-		newNs.DeletionTimestamp != nil ||
+func isTerminatingNamespaceUpdate(oldNs, newNs *corev1.Namespace) bool {
+	return newNs.DeletionTimestamp != nil ||
 		oldNs.DeletionTimestamp != nil ||
 		newNs.Status.Phase == corev1.NamespaceTerminating ||
 		oldNs.Status.Phase == corev1.NamespaceTerminating
 }
 
+// validateTerminatingNamespaceUpdate relaxes the namespace handlers only for
+// namespaces which are genuinely terminating. A namespaces/finalize request
+// against a live namespace is an ordinary metadata write carrying
+// spec.finalizers and must continue through the ownership and metadata
+// handlers like any other update.
 func validateTerminatingNamespaceUpdate(
 	req admission.Request,
 	oldNs, newNs *corev1.Namespace,
 ) (*admission.Response, bool) {
-	if !isTerminatingNamespaceUpdate(req, oldNs, newNs) {
+	terminating := isTerminatingNamespaceUpdate(oldNs, newNs)
+
+	if !terminating && req.SubResource != "finalize" {
 		return nil, false
 	}
 
@@ -253,7 +256,7 @@ func validateTerminatingNamespaceUpdate(
 		return ad.Deny("namespace tenant ownership can not change during termination"), true
 	}
 
-	return nil, true
+	return nil, terminating
 }
 
 func validateNamespaceTenantReferenceTransition(
@@ -277,6 +280,12 @@ func validateNamespaceTenantReferenceTransition(
 	case oldHasTenantReference && !newHasTenantReference:
 		return ad.Deny("namespace can not remove tenant ownership"), true
 	case !oldHasTenantReference && !newHasTenantReference:
+		// Tenant users must never write namespaces outside every Tenant,
+		// regardless of the resource or subresource carrying the request.
+		if user.IsCapsule() {
+			return ad.Deny("namespace is not owned by any tenant"), true
+		}
+
 		return nil, true
 	default:
 		return nil, false

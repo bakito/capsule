@@ -42,3 +42,5 @@ annotations:
   artifacthub.io/changes: |
     - kind: added
       description: added toggles for podSecurityContexts and securityContexts
+    - kind: security
+      description: namespaces mutating webhook now admits namespaces/status and namespaces/finalize subresources

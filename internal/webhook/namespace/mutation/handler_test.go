@@ -6,6 +6,7 @@ package mutation
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -125,6 +126,158 @@ func TestNamespaceHandlerDoesNotInterceptFinalize(t *testing.T) {
 
 	if response != nil {
 		t.Fatalf("finalize response = %#v, want no interception", response)
+	}
+}
+
+// TestNamespaceHandlerGuardsSubresourceWritesOnLiveNamespaces proves the
+// ownership gate of the mutating webhook sees namespaces/status and
+// namespaces/finalize writes against live namespaces exactly like plain
+// namespace updates, while genuinely terminating namespaces are skipped.
+func TestNamespaceHandlerGuardsSubresourceWritesOnLiveNamespaces(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ownerName    = "alice"
+		strangerName = "bob"
+	)
+
+	owner := rbac.CoreOwnerSpec{UserSpec: rbac.UserSpec{Name: ownerName, Kind: rbac.UserOwner}}
+	stranger := rbac.CoreOwnerSpec{UserSpec: rbac.UserSpec{Name: strangerName, Kind: rbac.UserOwner}}
+	green := testTenant("green", "green-uid")
+	green.Status.Owners = rbac.OwnerStatusListSpec{owner}
+	blue := testTenant("blue", "blue-uid")
+	blue.Status.Owners = rbac.OwnerStatusListSpec{stranger}
+	configurationObject := &capsulev1beta2.CapsuleConfiguration{
+		ObjectMeta: metav1.ObjectMeta{Name: "capsule"},
+		Status: capsulev1beta2.CapsuleConfigurationStatus{
+			Users: rbac.UserListSpec{owner.UserSpec, stranger.UserSpec},
+		},
+	}
+
+	managed := testTenantNamespace("workloads", green)
+	unmanaged := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system"}}
+
+	withLabel := func(ns *corev1.Namespace) *corev1.Namespace {
+		out := ns.DeepCopy()
+		if out.Labels == nil {
+			out.Labels = map[string]string{}
+		}
+
+		out.Labels["pod-security.kubernetes.io/enforce"] = "privileged"
+
+		return out
+	}
+
+	now := metav1.Now()
+	terminating := unmanaged.DeepCopy()
+	terminating.DeletionTimestamp = &now
+	terminating.Status.Phase = corev1.NamespaceTerminating
+
+	tests := []struct {
+		name         string
+		user         string
+		oldNs, newNs *corev1.Namespace
+		subresource  string
+		wantDenial   string
+	}{
+		{
+			name:        "owner status on own namespace is allowed",
+			user:        ownerName,
+			oldNs:       managed,
+			newNs:       withLabel(managed),
+			subresource: "status",
+		},
+		{
+			name:        "owner finalize on own namespace is allowed",
+			user:        ownerName,
+			oldNs:       managed,
+			newNs:       withLabel(managed),
+			subresource: "finalize",
+		},
+		{
+			name:        "other tenant owner finalize on foreign namespace is denied",
+			user:        strangerName,
+			oldNs:       managed,
+			newNs:       withLabel(managed),
+			subresource: "finalize",
+			wantDenial:  "denied patch request for this namespace",
+		},
+		{
+			name:        "tenant user status on unmanaged namespace is denied",
+			user:        ownerName,
+			oldNs:       unmanaged,
+			newNs:       withLabel(unmanaged),
+			subresource: "status",
+			wantDenial:  "namespace is not owned by any tenant",
+		},
+		{
+			name:        "tenant user finalize on unmanaged namespace is denied",
+			user:        ownerName,
+			oldNs:       unmanaged,
+			newNs:       withLabel(unmanaged),
+			subresource: "finalize",
+			wantDenial:  "namespace is not owned by any tenant",
+		},
+		{
+			name:        "tenant user finalize on terminating namespace is not intercepted",
+			user:        ownerName,
+			oldNs:       terminating,
+			newNs:       withLabel(terminating),
+			subresource: "finalize",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			scheme := testScheme(t)
+			cl := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(configurationObject.DeepCopy(), green.DeepCopy(), blue.DeepCopy()).
+				Build()
+			cfg := configuration.NewCapsuleConfiguration(ctx, cl, cl, nil, configurationObject.Name)
+			recorder := capevents.NewEventRecorder(nil, logr.Discard(), nil, nil)
+
+			oldRaw, err := json.Marshal(tt.oldNs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newRaw, err := json.Marshal(tt.newNs)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			response := NamespaceHandler(cfg, OwnerReferenceHandler(cfg)).OnUpdate(
+				cl,
+				cl,
+				admission.NewDecoder(scheme),
+				recorder,
+			)(ctx, admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+				Operation:   admissionv1.Update,
+				SubResource: tt.subresource,
+				Object:      runtime.RawExtension{Raw: newRaw},
+				OldObject:   runtime.RawExtension{Raw: oldRaw},
+				UserInfo:    authenticationv1.UserInfo{Username: tt.user},
+			}})
+
+			if tt.wantDenial == "" {
+				if response != nil && !response.Allowed {
+					t.Fatalf("response = %#v, want allow", response)
+				}
+
+				return
+			}
+
+			if response == nil || response.Allowed {
+				t.Fatalf("response = %#v, want denial %q", response, tt.wantDenial)
+			}
+
+			if !strings.Contains(response.Result.Message, tt.wantDenial) {
+				t.Fatalf("denial message = %q, want %q", response.Result.Message, tt.wantDenial)
+			}
+		})
 	}
 }
 

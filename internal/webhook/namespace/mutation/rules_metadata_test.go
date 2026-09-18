@@ -85,16 +85,60 @@ func TestNamespaceDenyOnlyMutationSkipsAudienceLookup(t *testing.T) {
 	}
 }
 
-func TestMutateNamespaceRulesSkipsFinalize(t *testing.T) {
+func TestMutateNamespaceRulesAppliesToSubresources(t *testing.T) {
 	t.Parallel()
 
-	request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
-		Operation:   admissionv1.Update,
-		SubResource: "finalize",
-	}}
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core API to scheme: %v", err)
+	}
+	if err := capsulev1beta2.AddToScheme(scheme); err != nil {
+		t.Fatalf("add Capsule API to scheme: %v", err)
+	}
 
-	if response := mutateNamespaceRules(nil, nil, nil, nil)(context.Background(), request); response != nil {
-		t.Fatalf("mutateNamespaceRules() response = %#v, want nil", response)
+	tnt := &capsulev1beta2.Tenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "solar"},
+		Spec: capsulev1beta2.TenantSpec{
+			Rules: []*rules.NamespaceRuleBodyTenant{{
+				NamespaceRuleBodyNamespace: &rules.NamespaceRuleBodyNamespace{
+					Enforce: &rules.NamespaceRuleEnforceBody{
+						Metadata: []rules.MetadataRule{{
+							VersionKinds: apiruntime.VersionKinds{
+								APIGroups: []string{"v1"},
+								Kinds:     []string{"Namespace"},
+							},
+							Labels: map[string]rules.MetadataValueRule{
+								"rules.example.com/managed": {Managed: ptr.To("true")},
+							},
+						}},
+					},
+				},
+			}},
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tnt).Build()
+
+	for _, subresource := range []string{"status", "finalize"} {
+		t.Run(subresource, func(t *testing.T) {
+			t.Parallel()
+
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name:   "solar-production",
+				Labels: map[string]string{meta.TenantLabel: tnt.Name, "rules.example.com/managed": "false"},
+			}}
+			request := admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+				Operation:   admissionv1.Update,
+				SubResource: subresource,
+			}}
+
+			if response := mutateNamespaceRules(client, client, nil, ns)(context.Background(), request); response != nil {
+				t.Fatalf("mutateNamespaceRules() response = %#v, want nil", response)
+			}
+
+			if got := ns.Labels["rules.example.com/managed"]; got != "true" {
+				t.Fatalf("managed namespace label = %q, want true", got)
+			}
+		})
 	}
 }
 
