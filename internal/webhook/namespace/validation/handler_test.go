@@ -255,11 +255,11 @@ func TestNamespaceHandlerSubresourceMetadataWrites(t *testing.T) {
 			wantDenial:  "namespace is not owned by any tenant",
 		},
 		{
-			name:        "tenant user plain update on unmanaged namespace is denied",
-			user:        ownerName,
-			oldNs:       unmanaged,
-			newNs:       withLabel(unmanaged),
-			wantDenial:  "namespace is not owned by any tenant",
+			name:       "tenant user plain update on unmanaged namespace is denied",
+			user:       ownerName,
+			oldNs:      unmanaged,
+			newNs:      withLabel(unmanaged),
+			wantDenial: "namespace is not owned by any tenant",
 		},
 		{
 			name:        "unrelated user status on unmanaged namespace is not intercepted",
