@@ -32,6 +32,9 @@ func TestNewRootCmd(t *testing.T) {
 	assert.True(t, subcommands["namespace"])
 	assert.True(t, subcommands["cordon"])
 	assert.True(t, subcommands["uncordon"])
+	assert.True(t, subcommands["reconcile"])
+	assert.True(t, subcommands["expire"])
+	assert.True(t, subcommands["resource-pool-claim"])
 	assert.True(t, subcommands["resource-permit"])
 	assert.True(t, subcommands["version"])
 }
