@@ -275,7 +275,7 @@ var _ = Describe("enforcing generic metadata namespace rules", Ordered, Label("t
 
 		g.Expect(got.Values).To(HaveLen(wantValues))
 
-		for i := 0; i < wantValues; i++ {
+		for i := range wantValues {
 			value := got.Values[i]
 
 			if len(expected.expressions) > i {

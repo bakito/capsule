@@ -11,9 +11,12 @@ import (
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/cordon"
+	"github.com/projectcapsule/capsule/cmd/cli/cmd/expire"
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/namespace"
+	"github.com/projectcapsule/capsule/cmd/cli/cmd/reconcile"
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/resourcepermit"
+	"github.com/projectcapsule/capsule/cmd/cli/cmd/resourcepoolclaim"
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/tenant"
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/version"
 	capsuleversion "github.com/projectcapsule/capsule/internal/version"
@@ -39,6 +42,9 @@ func NewRootCmd(f factory.Factory, streams genericclioptions.IOStreams) *cobra.C
 		namespace.NewCmdNamespace(f, streams),
 		cordon.NewCmdCordon(f, streams),
 		cordon.NewCmdUncordon(f, streams),
+		reconcile.NewCmdReconcile(f, streams),
+		expire.NewCmdExpire(f, streams),
+		resourcepoolclaim.NewCmdResourcePoolClaim(f, streams),
 		resourcepermit.NewCmdResourcePermit(f, streams),
 		version.NewCmdVersion(streams),
 	)
