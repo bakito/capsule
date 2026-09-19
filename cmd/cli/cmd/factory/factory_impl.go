@@ -4,6 +4,8 @@
 package factory
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -17,6 +19,33 @@ import (
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
 )
+
+// ImpersonationOptions contains impersonation settings for REST configs.
+type ImpersonationOptions struct {
+	User   string
+	Groups []string
+	UID    string
+}
+
+// ApplyTo sets impersonation options on a REST config.
+func (o ImpersonationOptions) ApplyTo(cfg *rest.Config) error {
+	if o.User != "" {
+		cfg.Impersonate.UserName = o.User
+		cfg.Impersonate.Groups = append([]string(nil), o.Groups...)
+	} else if len(o.Groups) > 0 {
+		cfg.Impersonate.Groups = append([]string(nil), o.Groups...)
+	}
+
+	if o.UID != "" {
+		cfg.Impersonate.UID = o.UID
+	}
+
+	if (len(cfg.Impersonate.Groups) > 0 || cfg.Impersonate.UID != "") && cfg.Impersonate.UserName == "" {
+		return fmt.Errorf("--as-group requires --as or an impersonated user in the kubeconfig")
+	}
+
+	return nil
+}
 
 type factoryImpl struct {
 	configFlags *genericclioptions.ConfigFlags

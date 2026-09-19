@@ -15,7 +15,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -135,7 +134,7 @@ func TestCordonGlobalTenantResource(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "default-policies"},
 		Spec: capsulev1beta2.GlobalTenantResourceSpec{
 			TenantResourceCommonSpec: capsulev1beta2.TenantResourceCommonSpec{
-				Cordoned: ptr.To(false),
+				Cordoned: new(false),
 			},
 		},
 	}
@@ -173,7 +172,7 @@ func TestCordonTenantResource(t *testing.T) {
 		},
 		Spec: capsulev1beta2.TenantResourceSpec{
 			TenantResourceCommonSpec: capsulev1beta2.TenantResourceCommonSpec{
-				Cordoned: ptr.To(false),
+				Cordoned: new(false),
 			},
 		},
 	}
