@@ -6,24 +6,27 @@ package namespace
 import (
 	"fmt"
 
+	"github.com/spf13/cobra"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/cordon"
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
-	"github.com/spf13/cobra"
 )
 
 // NewCmdNamespaceCordon returns the namespace cordon subcommand.
-func NewCmdNamespaceCordon(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdNamespaceCordon(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	return newCmdNamespaceCordonToggle(f, streams, true)
 }
 
 // NewCmdNamespaceUncordon returns the namespace uncordon subcommand.
-func NewCmdNamespaceUncordon(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdNamespaceUncordon(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	return newCmdNamespaceCordonToggle(f, streams, false)
 }
 
-func newCmdNamespaceCordonToggle(f factory.Factory, streams genericiooptions.IOStreams, cordoned bool) *cobra.Command {
+func newCmdNamespaceCordonToggle(f factory.Factory, streams genericclioptions.IOStreams, cordoned bool) *cobra.Command {
 	verb := "cordon"
 	short := "Cordon a Namespace to prevent workload creation and modification"
+
 	if !cordoned {
 		verb = "uncordon"
 		short = "Uncordon a Namespace to resume workload operations"
@@ -47,6 +50,7 @@ func newCmdNamespaceCordonToggle(f factory.Factory, streams genericiooptions.IOS
 			if err := opts.Complete(cmd, []string{"namespace", args[0]}); err != nil {
 				return err
 			}
+
 			return opts.Run(cmd.Context())
 		},
 	}

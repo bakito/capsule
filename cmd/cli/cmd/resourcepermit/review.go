@@ -66,6 +66,7 @@ func NewCmdReview(f factory.Factory, streams genericclioptions.IOStreams) *cobra
     --as alice@example.com --as-group platform-engineers`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Name = args[0]
+
 			return o.Run(cmd.Context())
 		},
 	}
@@ -97,33 +98,18 @@ func (o *ReviewOptions) Run(ctx context.Context) error {
 		ns, _, _ := o.Factory.Namespace()
 		o.Namespace = ns
 	}
+
 	if o.Namespace == "" {
 		o.Namespace = "default"
 	}
 
 	br := &v1beta2.ResourcePermit{}
-	if err := o.Client.Get(
-		ctx,
-		ctrlclient.ObjectKey{Name: o.Name, Namespace: o.Namespace},
-		br,
-	); err != nil {
+	if err := o.Client.Get(ctx, ctrlclient.ObjectKey{Name: o.Name, Namespace: o.Namespace}, br); err != nil {
 		return err
 	}
 
-	if br.Status.Phase == "" {
-		return fmt.Errorf(
-			"ResourcePermit %s is not yet processed, current phase: %q",
-			o.Name,
-			br.Status.Phase,
-		)
-	}
-
 	if br.Status.Phase != v1beta2.ResourcePermitPhaseRequested {
-		return fmt.Errorf(
-			"ResourcePermit %s is not in Requested phase (already reviewed), current phase: %q",
-			o.Name,
-			br.Status.Phase,
-		)
+		return fmt.Errorf("ResourcePermit %s is not in Requested phase, current phase: %q", o.Name, br.Status.Phase)
 	}
 
 	if br.Status.Request == nil {
@@ -131,7 +117,43 @@ func (o *ReviewOptions) Run(ctx context.Context) error {
 	}
 
 	props := br.Status.Request.DeepCopy()
+	if err := o.applyOverrides(props); err != nil {
+		return err
+	}
 
+	action, err := o.determineAction(br, props)
+	if err != nil {
+		return err
+	}
+
+	return retry.OnError(retry.DefaultRetry, apierrors.IsConflict, func() error {
+		if err := o.Client.Get(ctx, ctrlclient.ObjectKey{Name: o.Name, Namespace: o.Namespace}, br); err != nil {
+			return err
+		}
+
+		return patchResourcePermitStatus(ctx, o.Client, br, func() error {
+			switch action {
+			case approveValue:
+				br.Status.Phase = v1beta2.ResourcePermitPhaseApproved
+				br.Status.Request = props.DeepCopy()
+			case denyValue:
+				br.Status.Phase = v1beta2.ResourcePermitPhaseDenied
+			default:
+				return fmt.Errorf("unsupported review action %q", action)
+			}
+
+			if br.Status.Review == nil {
+				br.Status.Review = &v1beta2.ReviewInfo{}
+			}
+
+			br.Status.Review.Message = o.Message
+
+			return nil
+		})
+	})
+}
+
+func (o *ReviewOptions) applyOverrides(props *v1beta2.ResourcePermitStatusRequest) error {
 	if o.KeepForStr != "" {
 		d, err := str2duration.ParseDuration(o.KeepForStr)
 		if err != nil {
@@ -160,71 +182,44 @@ func (o *ReviewOptions) Run(ctx context.Context) error {
 		props.StartTime = &st
 	}
 
-	if o.Approve && o.Deny {
-		return fmt.Errorf("--approve and --deny are mutually exclusive")
-	}
+	return nil
+}
 
-	action := ""
-	if o.Approve {
-		action = approveValue
-	} else if o.Deny {
-		action = denyValue
-	} else {
-		printResourcePermitsApprovalTable(o.IOStreams.Out, br, props, !o.NoColor)
+func (o *ReviewOptions) promptApproval(br *v1beta2.ResourcePermit, props *v1beta2.ResourcePermitStatusRequest) (string, error) {
+	printResourcePermitsApprovalTable(o.IOStreams.Out, br, props, !o.NoColor)
 
-		reader := bufio.NewReader(o.IOStreams.In)
-		for {
-			_, _ = fmt.Fprint(o.IOStreams.Out, "Approve this request? [y/n]: ")
+	reader := bufio.NewReader(o.IOStreams.In)
 
-			input, err := reader.ReadString('\n')
-			if err != nil {
-				return err
-			}
+	for {
+		_, _ = fmt.Fprint(o.IOStreams.Out, "Approve this request? [y/n]: ")
 
-			input = strings.ToLower(strings.TrimSpace(input))
-			if input == "y" {
-				action = approveValue
-				break
-			} else if input == "n" {
-				action = denyValue
-				break
-			} else {
-				_, _ = fmt.Fprintln(o.IOStreams.Out, "Invalid input. Please type 'y' or 'n'.")
-			}
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+
+		switch strings.ToLower(strings.TrimSpace(input)) {
+		case "y":
+			return approveValue, nil
+		case "n":
+			return denyValue, nil
+		default:
+			_, _ = fmt.Fprintln(o.IOStreams.Out, "Invalid input. Please type 'y' or 'n'.")
 		}
 	}
+}
 
-	return retry.OnError(
-		retry.DefaultRetry,
-		apierrors.IsConflict,
-		func() error {
-			if err := o.Client.Get(
-				ctx,
-				ctrlclient.ObjectKey{Name: o.Name, Namespace: o.Namespace},
-				br,
-			); err != nil {
-				return err
-			}
+func (o *ReviewOptions) determineAction(br *v1beta2.ResourcePermit, props *v1beta2.ResourcePermitStatusRequest) (string, error) {
+	if o.Approve && o.Deny {
+		return "", fmt.Errorf("--approve and --deny are mutually exclusive")
+	}
 
-			return patchResourcePermitStatus(ctx, o.Client, br, func() error {
-				switch action {
-				case approveValue:
-					br.Status.Phase = v1beta2.ResourcePermitPhaseApproved
-					br.Status.Request = props.DeepCopy()
-				case denyValue:
-					br.Status.Phase = v1beta2.ResourcePermitPhaseDenied
-				default:
-					return fmt.Errorf("unsupported review action %q", action)
-				}
-
-				if br.Status.Review == nil {
-					br.Status.Review = &v1beta2.ReviewInfo{}
-				}
-
-				br.Status.Review.Message = o.Message
-
-				return nil
-			})
-		},
-	)
+	switch {
+	case o.Approve:
+		return approveValue, nil
+	case o.Deny:
+		return denyValue, nil
+	default:
+		return o.promptApproval(br, props)
+	}
 }

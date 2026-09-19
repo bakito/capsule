@@ -11,11 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -35,12 +33,12 @@ func TestCordonTenant(t *testing.T) {
 
 	scheme := newTestScheme()
 	tnt := &capsulev1beta2.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: "oil"},
-		Spec:       capsulev1beta2.TenantSpec{Cordoned: false},
+		Name: "oil",
+		Spec: capsulev1beta2.TenantSpec{Cordoned: false},
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tnt).Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 
@@ -66,21 +64,19 @@ func TestCordonNamespace(t *testing.T) {
 
 	scheme := newTestScheme()
 	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "oil-prod",
-			Labels: map[string]string{
-				meta.TenantLabel: "oil",
-			},
+		Name: "oil-prod",
+		Labels: map[string]string{
+			meta.TenantLabel: "oil",
 		},
 	}
 	tnt := &capsulev1beta2.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: "oil"},
-		Spec:       capsulev1beta2.TenantSpec{Cordoned: true},
+		Name: "oil",
+		Spec: capsulev1beta2.TenantSpec{Cordoned: true},
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns, tnt).Build()
 
 	t.Run("cordon namespace", func(t *testing.T) {
-		streams, _, out, _ := genericclioptions.NewTestIOStreams()
+		streams, _, _, _ := genericclioptions.NewTestIOStreams()
 		var buf bytes.Buffer
 		streams.Out = &buf
 
@@ -102,7 +98,7 @@ func TestCordonNamespace(t *testing.T) {
 	})
 
 	t.Run("uncordon namespace with warning for cordoned parent tenant", func(t *testing.T) {
-		streams, _, out, errOut := genericclioptions.NewTestIOStreams()
+		streams, _, _, _ := genericclioptions.NewTestIOStreams()
 		var buf bytes.Buffer
 		var errBuf bytes.Buffer
 		streams.Out = &buf
@@ -132,16 +128,16 @@ func TestCordonGlobalTenantResource(t *testing.T) {
 
 	scheme := newTestScheme()
 	gtr := &capsulev1beta2.GlobalTenantResource{
-		ObjectMeta: metav1.ObjectMeta{Name: "default-policies"},
+		Name: "default-policies",
 		Spec: capsulev1beta2.GlobalTenantResourceSpec{
 			TenantResourceCommonSpec: capsulev1beta2.TenantResourceCommonSpec{
-				Cordoned: ptr.To(false),
+				Cordoned: new(false),
 			},
 		},
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gtr).Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 
@@ -167,19 +163,17 @@ func TestCordonTenantResource(t *testing.T) {
 
 	scheme := newTestScheme()
 	tr := &capsulev1beta2.TenantResource{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "local-policies",
-			Namespace: "oil-dev",
-		},
+		Name:      "local-policies",
+		Namespace: "oil-dev",
 		Spec: capsulev1beta2.TenantResourceSpec{
 			TenantResourceCommonSpec: capsulev1beta2.TenantResourceCommonSpec{
-				Cordoned: ptr.To(false),
+				Cordoned: new(false),
 			},
 		},
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tr).Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 

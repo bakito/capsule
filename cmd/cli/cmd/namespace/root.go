@@ -4,12 +4,14 @@
 package namespace
 
 import (
-	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 	"github.com/spf13/cobra"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+
+	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 )
 
 // NewCmdNamespace returns the namespace parent command.
-func NewCmdNamespace(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdNamespace(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "namespace",
 		Aliases: []string{"namespaces", "ns"},

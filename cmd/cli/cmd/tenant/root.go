@@ -4,23 +4,24 @@
 package tenant
 
 import (
-	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 	"github.com/spf13/cobra"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+
+	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 )
 
 // NewCmdTenant returns the tenant parent command.
-func NewCmdTenant(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdTenant(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "tenant",
 		Aliases: []string{"tenants", "tnt"},
 		Short:   "Manage Capsule Tenants",
-		Long:    "Create, get, describe, cordon, and uncordon Capsule Tenants.",
+		Long:    "Create, describe, cordon, and uncordon Capsule Tenants.",
 	}
 
 	cmd.AddCommand(
-		NewCmdGet(f, streams),
-		NewCmdDescribe(f, streams),
 		NewCmdCreate(f, streams),
+		NewCmdDescribe(f, streams),
 		NewCmdTenantCordon(f, streams),
 		NewCmdTenantUncordon(f, streams),
 	)

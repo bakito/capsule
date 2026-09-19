@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/utils/ptr"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
@@ -21,7 +21,7 @@ import (
 
 type CordonOptions struct {
 	Factory         factory.Factory
-	IOStreams       genericiooptions.IOStreams
+	IOStreams       genericclioptions.IOStreams
 	DesiredCordoned bool
 
 	ResourceType string
@@ -44,6 +44,7 @@ func (o *CordonOptions) Complete(cmd *cobra.Command, args []string) error {
 		ns, _, _ := o.Factory.Namespace()
 		o.Namespace = ns
 	}
+
 	if o.Namespace == "" {
 		o.Namespace = "default"
 	}
@@ -53,11 +54,13 @@ func (o *CordonOptions) Complete(cmd *cobra.Command, args []string) error {
 		if len(parts) == 2 {
 			o.ResourceType = strings.ToLower(parts[0])
 			o.ResourceName = parts[1]
+
 			return nil
 		}
 	} else if len(args) >= 2 {
 		o.ResourceType = strings.ToLower(args[0])
 		o.ResourceName = args[1]
+
 		return nil
 	}
 
@@ -106,11 +109,13 @@ func (o *CordonOptions) runTenant(ctx context.Context, action string) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("tenant %q not found", o.ResourceName)
 		}
+
 		return err
 	}
 
 	if tnt.Spec.Cordoned == o.DesiredCordoned {
 		_, _ = fmt.Fprintf(o.IOStreams.Out, "tenant.capsule.clastix.io/%s already %s\n", tnt.Name, action)
+
 		return nil
 	}
 
@@ -122,6 +127,7 @@ func (o *CordonOptions) runTenant(ctx context.Context, action string) error {
 	}
 
 	_, _ = fmt.Fprintf(o.IOStreams.Out, "tenant.capsule.clastix.io/%s %s\n", tnt.Name, action)
+
 	return nil
 }
 
@@ -131,6 +137,7 @@ func (o *CordonOptions) runNamespace(ctx context.Context, action string) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("namespace %q not found", o.ResourceName)
 		}
+
 		return err
 	}
 
@@ -138,6 +145,7 @@ func (o *CordonOptions) runNamespace(ctx context.Context, action string) error {
 
 	if isCordoned == o.DesiredCordoned {
 		_, _ = fmt.Fprintf(o.IOStreams.Out, "namespace/%s already %s\n", ns.Name, action)
+
 		return nil
 	}
 
@@ -154,6 +162,7 @@ func (o *CordonOptions) runNamespace(ctx context.Context, action string) error {
 	}
 
 	patch := ctrlclient.MergeFrom(ns.DeepCopy())
+
 	if ns.Labels == nil {
 		ns.Labels = make(map[string]string)
 	}
@@ -169,6 +178,7 @@ func (o *CordonOptions) runNamespace(ctx context.Context, action string) error {
 	}
 
 	_, _ = fmt.Fprintf(o.IOStreams.Out, "namespace/%s %s\n", ns.Name, action)
+
 	return nil
 }
 
@@ -178,22 +188,25 @@ func (o *CordonOptions) runGTR(ctx context.Context, action string) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("globaltenantresource %q not found", o.ResourceName)
 		}
+
 		return err
 	}
 
 	if gtr.Spec.IsCordoned() == o.DesiredCordoned {
 		_, _ = fmt.Fprintf(o.IOStreams.Out, "globaltenantresource.capsule.clastix.io/%s already %s\n", gtr.Name, action)
+
 		return nil
 	}
 
 	patch := ctrlclient.MergeFrom(gtr.DeepCopy())
-	gtr.Spec.Cordoned = ptr.To(o.DesiredCordoned)
+	gtr.Spec.Cordoned = new(o.DesiredCordoned)
 
 	if err := o.Client.Patch(ctx, gtr, patch); err != nil {
 		return fmt.Errorf("failed to %s globaltenantresource %q: %w", action[:len(action)-2], o.ResourceName, err)
 	}
 
 	_, _ = fmt.Fprintf(o.IOStreams.Out, "globaltenantresource.capsule.clastix.io/%s %s\n", gtr.Name, action)
+
 	return nil
 }
 
@@ -203,21 +216,24 @@ func (o *CordonOptions) runTR(ctx context.Context, action string) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("tenantresource %s/%s not found", o.Namespace, o.ResourceName)
 		}
+
 		return err
 	}
 
 	if tr.Spec.IsCordoned() == o.DesiredCordoned {
 		_, _ = fmt.Fprintf(o.IOStreams.Out, "tenantresource.capsule.clastix.io/%s already %s\n", tr.Name, action)
+
 		return nil
 	}
 
 	patch := ctrlclient.MergeFrom(tr.DeepCopy())
-	tr.Spec.Cordoned = ptr.To(o.DesiredCordoned)
+	tr.Spec.Cordoned = new(o.DesiredCordoned)
 
 	if err := o.Client.Patch(ctx, tr, patch); err != nil {
 		return fmt.Errorf("failed to %s tenantresource %q: %w", action[:len(action)-2], o.ResourceName, err)
 	}
 
 	_, _ = fmt.Fprintf(o.IOStreams.Out, "tenantresource.capsule.clastix.io/%s %s\n", tr.Name, action)
+
 	return nil
 }

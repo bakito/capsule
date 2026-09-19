@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/cli-runtime/pkg/genericiooptions"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
@@ -18,24 +18,25 @@ import (
 
 type CordonOptions struct {
 	Factory         factory.Factory
-	IOStreams       genericiooptions.IOStreams
+	IOStreams       genericclioptions.IOStreams
 	DesiredCordoned bool
 
 	Name   string
 	Client ctrlclient.Client
 }
 
-func NewCmdTenantCordon(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdTenantCordon(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	return newCmdTenantCordonToggle(f, streams, true)
 }
 
-func NewCmdTenantUncordon(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdTenantUncordon(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	return newCmdTenantCordonToggle(f, streams, false)
 }
 
-func newCmdTenantCordonToggle(f factory.Factory, streams genericiooptions.IOStreams, cordoned bool) *cobra.Command {
+func newCmdTenantCordonToggle(f factory.Factory, streams genericclioptions.IOStreams, cordoned bool) *cobra.Command {
 	verb := "cordon"
 	short := "Cordon a Tenant to prevent new namespace operations"
+
 	if !cordoned {
 		verb = "uncordon"
 		short = "Uncordon a Tenant to resume namespace operations"
@@ -55,6 +56,7 @@ func newCmdTenantCordonToggle(f factory.Factory, streams genericiooptions.IOStre
   kubectl capsule tenant %s oil`, verb, verb),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Name = args[0]
+
 			return o.Run(cmd.Context())
 		},
 	}
@@ -64,7 +66,7 @@ func newCmdTenantCordonToggle(f factory.Factory, streams genericiooptions.IOStre
 
 func (o *CordonOptions) Run(ctx context.Context) error {
 	var err error
-	if o.Client == nil {
+	if o.Client == nil && o.Factory != nil {
 		o.Client, err = o.Factory.ToControllerRuntimeClient()
 		if err != nil {
 			return err
@@ -81,11 +83,13 @@ func (o *CordonOptions) Run(ctx context.Context) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("tenant %q not found", o.Name)
 		}
+
 		return err
 	}
 
 	if tnt.Spec.Cordoned == o.DesiredCordoned {
 		_, _ = fmt.Fprintf(o.IOStreams.Out, "tenant.capsule.clastix.io/%s already %s\n", tnt.Name, action)
+
 		return nil
 	}
 
@@ -97,5 +101,6 @@ func (o *CordonOptions) Run(ctx context.Context) error {
 	}
 
 	_, _ = fmt.Fprintf(o.IOStreams.Out, "tenant.capsule.clastix.io/%s %s\n", tnt.Name, action)
+
 	return nil
 }

@@ -6,23 +6,26 @@ package cordon
 import (
 	"fmt"
 
-	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 	"github.com/spf13/cobra"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+
+	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 )
 
 // NewCmdCordon returns the top-level cordon command.
-func NewCmdCordon(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdCordon(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	return newCordonCommand(f, streams, true)
 }
 
 // NewCmdUncordon returns the top-level uncordon command.
-func NewCmdUncordon(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdUncordon(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	return newCordonCommand(f, streams, false)
 }
 
-func newCordonCommand(f factory.Factory, streams genericiooptions.IOStreams, cordoned bool) *cobra.Command {
+func newCordonCommand(f factory.Factory, streams genericclioptions.IOStreams, cordoned bool) *cobra.Command {
 	verb := "cordon"
 	short := "Cordon a Capsule Tenant, Namespace, GlobalTenantResource, or TenantResource"
+
 	if !cordoned {
 		verb = "uncordon"
 		short = "Uncordon a Capsule Tenant, Namespace, GlobalTenantResource, or TenantResource"
@@ -53,9 +56,11 @@ func newCordonCommand(f factory.Factory, streams genericiooptions.IOStreams, cor
 			if err := opts.Complete(cmd, args); err != nil {
 				return err
 			}
+
 			if err := opts.Validate(); err != nil {
 				return err
 			}
+
 			return opts.Run(cmd.Context())
 		},
 	}

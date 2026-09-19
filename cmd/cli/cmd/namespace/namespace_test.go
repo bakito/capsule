@@ -36,25 +36,21 @@ func TestNamespaceAdd(t *testing.T) {
 	scheme := newTestScheme()
 	quota := int32(2)
 	tnt := &capsulev1beta2.Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "oil",
-			UID:  types.UID("tnt-oil-uid"),
-		},
+		Name: "oil",
+		UID:  types.UID("tnt-oil-uid"),
 		Spec: capsulev1beta2.TenantSpec{
 			NamespaceOptions: &capsulev1beta2.NamespaceOptions{
 				Quota: &quota,
 			},
 		},
 		Status: capsulev1beta2.TenantStatus{
-			Spaces: []capsulev1beta2.TenantStatusNamespaceItem{
+			Spaces: []*capsulev1beta2.TenantStatusNamespaceItem{
 				{Name: "oil-prod"},
 			},
 		},
 	}
 	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "standalone-ns",
-		},
+		Name: "standalone-ns",
 	}
 
 	fakeClient := fake.NewClientBuilder().
@@ -62,7 +58,7 @@ func TestNamespaceAdd(t *testing.T) {
 		WithObjects(tnt, ns).
 		Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 
@@ -92,20 +88,20 @@ func TestNamespaceAddErrors(t *testing.T) {
 	scheme := newTestScheme()
 	quota := int32(1)
 	cordonedTnt := &capsulev1beta2.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: "gas"},
-		Spec:       capsulev1beta2.TenantSpec{Cordoned: true},
+		Name: "gas",
+		Spec: capsulev1beta2.TenantSpec{Cordoned: true},
 	}
 	quotaFullTnt := &capsulev1beta2.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: "solar"},
+		Name: "solar",
 		Spec: capsulev1beta2.TenantSpec{
 			NamespaceOptions: &capsulev1beta2.NamespaceOptions{Quota: &quota},
 		},
 		Status: capsulev1beta2.TenantStatus{
-			Spaces: []capsulev1beta2.TenantStatusNamespaceItem{{Name: "solar-ns1"}},
+			Spaces: []*capsulev1beta2.TenantStatusNamespaceItem{{Name: "solar-ns1"}},
 		},
 	}
 	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: "app-ns"},
+		Name: "app-ns",
 	}
 
 	fakeClient := fake.NewClientBuilder().
@@ -145,30 +141,24 @@ func TestNamespaceMove(t *testing.T) {
 
 	scheme := newTestScheme()
 	tenantA := &capsulev1beta2.Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "tenant-a",
-			UID:  types.UID("tnt-a-uid"),
-		},
+		Name: "tenant-a",
+		UID:  types.UID("tnt-a-uid"),
 	}
 	tenantB := &capsulev1beta2.Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "tenant-b",
-			UID:  types.UID("tnt-b-uid"),
-		},
+		Name: "tenant-b",
+		UID:  types.UID("tnt-b-uid"),
 	}
 	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "app-dev",
-			Labels: map[string]string{
-				meta.TenantLabel: "tenant-a",
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: capsulev1beta2.GroupVersion.String(),
-					Kind:       "Tenant",
-					Name:       "tenant-a",
-					UID:        types.UID("tnt-a-uid"),
-				},
+		Name: "app-dev",
+		Labels: map[string]string{
+			meta.TenantLabel: "tenant-a",
+		},
+		OwnerReferences: []metav1.OwnerReference{
+			{
+				APIVersion: capsulev1beta2.GroupVersion.String(),
+				Kind:       "Tenant",
+				Name:       "tenant-a",
+				UID:        types.UID("tnt-a-uid"),
 			},
 		},
 	}
@@ -178,7 +168,7 @@ func TestNamespaceMove(t *testing.T) {
 		WithObjects(tenantA, tenantB, ns).
 		Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 
@@ -207,19 +197,17 @@ func TestNamespaceRemove(t *testing.T) {
 
 	scheme := newTestScheme()
 	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "app-prod",
-			Labels: map[string]string{
-				meta.TenantLabel: "tenant-a",
-				"env":            "prod",
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: capsulev1beta2.GroupVersion.String(),
-					Kind:       "Tenant",
-					Name:       "tenant-a",
-					UID:        types.UID("tnt-a-uid"),
-				},
+		Name: "app-prod",
+		Labels: map[string]string{
+			meta.TenantLabel: "tenant-a",
+			"env":            "prod",
+		},
+		OwnerReferences: []metav1.OwnerReference{
+			{
+				APIVersion: capsulev1beta2.GroupVersion.String(),
+				Kind:       "Tenant",
+				Name:       "tenant-a",
+				UID:        types.UID("tnt-a-uid"),
 			},
 		},
 	}
@@ -229,7 +217,7 @@ func TestNamespaceRemove(t *testing.T) {
 		WithObjects(ns).
 		Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 

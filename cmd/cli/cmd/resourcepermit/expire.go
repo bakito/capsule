@@ -13,25 +13,12 @@ import (
 
 // NewCmdExpire returns the expire subcommand.
 func NewCmdExpire(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
-	o := &ActionOptions{
-		Factory:   f,
-		IOStreams: streams,
-		Phase:     capsulev1beta2.ResourcePermitPhaseExpired,
-	}
-
-	cmd := &cobra.Command{
-		Use:   "expire NAME [flags]",
-		Short: "Expire a ResourcePermit",
-		Args:  cobra.ExactArgs(1),
-		Example: `  # Expire an existing ResourcePermit
-  kubectl capsule resource-permit expire grant-admin --namespace default`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			o.Name = args[0]
-			return o.Run(cmd.Context())
-		},
-	}
-
-	cmd.Flags().StringVarP(&o.Namespace, "namespace", "n", "", "Namespace of the ResourcePermit")
-
-	return cmd
+	return newActionCmd(
+		f,
+		streams,
+		capsulev1beta2.ResourcePermitPhaseExpired,
+		"expire",
+		"Expire a ResourcePermit",
+		"  # Expire an existing ResourcePermit\n  kubectl capsule resource-permit expire grant-admin --namespace default",
+	)
 }

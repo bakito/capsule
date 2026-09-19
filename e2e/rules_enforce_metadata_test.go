@@ -271,10 +271,7 @@ var _ = Describe("enforcing generic metadata namespace rules", Ordered, Label("t
 	expectMetadataPolicy := func(g Gomega, got rules.MetadataValueRule, expected expectedMetadataPolicy) {
 		g.Expect(got.Required).To(Equal(expected.required))
 
-		wantValues := max(len(expected.exact), len(expected.expressions))
-		if len(expected.negated) > wantValues {
-			wantValues = len(expected.negated)
-		}
+		wantValues := max(len(expected.negated), max(len(expected.exact), len(expected.expressions)))
 
 		g.Expect(got.Values).To(HaveLen(wantValues))
 

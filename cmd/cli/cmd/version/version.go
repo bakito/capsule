@@ -6,12 +6,14 @@ package version
 import (
 	"fmt"
 
-	capsuleversion "github.com/projectcapsule/capsule/internal/version"
 	"github.com/spf13/cobra"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+
+	capsuleversion "github.com/projectcapsule/capsule/internal/version"
 )
 
 // NewCmdVersion returns the version subcommand.
-func NewCmdVersion(streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdVersion(streams genericclioptions.IOStreams) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print the Capsule CLI version",
