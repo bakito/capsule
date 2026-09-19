@@ -4,22 +4,82 @@
 package resourcepermit
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/client-go/util/retry"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
+	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 )
 
-var activateCmd = &cobra.Command{
-	Use:   "activate",
-	Short: "activate a ResourcePermit",
-	Args:  cobra.ExactArgs(1),
-	Example: `
-  # activate an existing ResourcePermit
-  kubectl capsule resource-permit activate grant-admin --namespace default
-`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		name = args[0]
+type ActionOptions struct {
+	Factory   factory.Factory
+	IOStreams genericclioptions.IOStreams
 
-		return runResourcePermitAction(capsulev1beta2.ResourcePermitPhaseActive)
-	},
+	Name      string
+	Namespace string
+	Phase     capsulev1beta2.ResourcePermitPhase
+	Client    ctrlclient.Client
+}
+
+func (o *ActionOptions) Run(ctx context.Context) error {
+	var err error
+	if o.Client == nil && o.Factory != nil {
+		o.Client, err = o.Factory.ToControllerRuntimeClient()
+		if err != nil {
+			return err
+		}
+	}
+
+	if o.Namespace == "" && o.Factory != nil {
+		ns, _, _ := o.Factory.Namespace()
+		o.Namespace = ns
+	}
+	if o.Namespace == "" {
+		o.Namespace = "default"
+	}
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		br := &capsulev1beta2.ResourcePermit{}
+		if err := o.Client.Get(
+			ctx,
+			ctrlclient.ObjectKey{Name: o.Name, Namespace: o.Namespace},
+			br,
+		); err != nil {
+			return err
+		}
+
+		return patchResourcePermitStatus(ctx, o.Client, br, func() error {
+			br.Status.Phase = o.Phase
+			return nil
+		})
+	})
+}
+
+// NewCmdActivate returns the activate subcommand.
+func NewCmdActivate(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
+	o := &ActionOptions{
+		Factory:   f,
+		IOStreams: streams,
+		Phase:     capsulev1beta2.ResourcePermitPhaseActive,
+	}
+
+	cmd := &cobra.Command{
+		Use:   "activate NAME [flags]",
+		Short: "Activate a ResourcePermit",
+		Args:  cobra.ExactArgs(1),
+		Example: `  # Activate an existing ResourcePermit
+  kubectl capsule resource-permit activate grant-admin --namespace default`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			o.Name = args[0]
+			return o.Run(cmd.Context())
+		},
+	}
+
+	cmd.Flags().StringVarP(&o.Namespace, "namespace", "n", "", "Namespace of the ResourcePermit")
+
+	return cmd
 }
