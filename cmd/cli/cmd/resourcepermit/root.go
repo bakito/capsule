@@ -7,42 +7,36 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
+	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 )
-
-var (
-	name          string
-	namespace     string
-	impersonation impersonationOptions
-)
-
-var RootCmd = &cobra.Command{
-	Use:     "resource-permit",
-	Aliases: []string{"resourcepermit", "rp", "permit"},
-	Short:   "Manage ResourcePermits",
-}
 
 var scheme = runtime.NewScheme()
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
 	utilruntime.Must(capsulev1beta2.AddToScheme(scheme))
 }
 
-func init() {
-	RootCmd.PersistentFlags().
-		StringVarP(&namespace, "namespace", "n", "default", "Namespace of the ResourcePermits")
-	RootCmd.PersistentFlags().
-		StringVar(&impersonation.User, "as", "", "Username to impersonate for the operation")
-	RootCmd.PersistentFlags().
-		StringArrayVar(&impersonation.Groups, "as-group", nil, "Group to impersonate; may be repeated")
+// NewCmdResourcePermit returns the resource-permit parent command.
+func NewCmdResourcePermit(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "resource-permit",
+		Aliases: []string{"resourcepermit", "rp", "permit"},
+		Short:   "Manage ResourcePermits",
+		Long:    "Get, review, activate, expire, and retry ResourcePermits.",
+	}
 
-	// Add subcommands
-	RootCmd.AddCommand(reviewCmd)
-	RootCmd.AddCommand(activateCmd)
-	RootCmd.AddCommand(expireCmd)
-	RootCmd.AddCommand(retryCmd)
+	cmd.AddCommand(
+		NewCmdGet(f, streams),
+		NewCmdReview(f, streams),
+		NewCmdActivate(f, streams),
+		NewCmdExpire(f, streams),
+		NewCmdRetry(f, streams),
+	)
+
+	return cmd
 }

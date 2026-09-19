@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -17,9 +17,7 @@ import (
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/util/retry"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/yaml"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
@@ -27,12 +25,13 @@ import (
 )
 
 func printResourcePermitsApprovalTable(
+	out io.Writer,
 	br *capsulev1beta2.ResourcePermit,
 	app *capsulev1beta2.ResourcePermitStatusRequest,
 	color bool,
 ) {
 	t := table.NewWriter()
-	t.SetOutputMirror(os.Stdout)
+	t.SetOutputMirror(out)
 	t.SetStyle(table.StyleRounded)
 
 	t.Style().Title.Align = text.AlignCenter
@@ -67,7 +66,7 @@ func printResourcePermitsApprovalTable(
 	t.Render()
 
 	resources := table.NewWriter()
-	resources.SetOutputMirror(os.Stdout)
+	resources.SetOutputMirror(out)
 	resources.SetStyle(table.StyleRounded)
 	resources.AppendHeader(table.Row{"Policy", "Resource"})
 
@@ -154,12 +153,10 @@ func colorizeYAML(src string) string {
 }
 
 func colorize(src string, it chroma.Iterator) string {
-	// Choose a style; "dracula", "native", "github", etc. Fall back to "native".
 	style := styles.Get("native")
 	if style == nil {
 		style = styles.Fallback
 	}
-	// Use terminal16m for truecolor; fall back to the standard terminal if not supported.
 	formatter := formatters.Get("terminal16m")
 	if formatter == nil {
 		formatter = formatters.Fallback
@@ -171,21 +168,6 @@ func colorize(src string, it chroma.Iterator) string {
 	}
 
 	return buf.String()
-}
-
-func newK8sClient() (*rest.Config, ctrlclient.Client, error) {
-	cfg, err := config.GetConfig()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if err := impersonation.applyTo(cfg); err != nil {
-		return nil, nil, err
-	}
-
-	cl, err := ctrlclient.New(cfg, ctrlclient.Options{Scheme: scheme})
-
-	return cfg, cl, err
 }
 
 type impersonationOptions struct {
@@ -206,32 +188,6 @@ func (o impersonationOptions) applyTo(cfg *rest.Config) error {
 	}
 
 	return nil
-}
-
-func runResourcePermitAction(phase capsulev1beta2.ResourcePermitPhase) error {
-	ctx := context.Background()
-
-	_, k8sClient, err := newK8sClient()
-	if err != nil {
-		return err
-	}
-
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		br := &capsulev1beta2.ResourcePermit{}
-		if err := k8sClient.Get(
-			ctx,
-			ctrlclient.ObjectKey{Name: name, Namespace: namespace},
-			br,
-		); err != nil {
-			return err
-		}
-
-		return patchResourcePermitStatus(ctx, k8sClient, br, func() error {
-			br.Status.Phase = phase
-
-			return nil
-		})
-	})
 }
 
 func patchResourcePermitStatus(
