@@ -6,7 +6,6 @@ package resourcepermit
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"strings"
 
@@ -16,35 +15,16 @@ import (
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
-	"k8s.io/client-go/rest"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
+	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 	apiruntime "github.com/projectcapsule/capsule/pkg/api/runtime"
 )
 
 // ImpersonationOptions contains impersonation settings for REST configs.
-type ImpersonationOptions struct {
-	User   string
-	Groups []string
-}
-
-// ApplyTo sets impersonation options on a REST config.
-func (o ImpersonationOptions) ApplyTo(cfg *rest.Config) error {
-	if o.User != "" {
-		cfg.Impersonate.UserName = o.User
-		cfg.Impersonate.Groups = append([]string(nil), o.Groups...)
-	} else if len(o.Groups) > 0 {
-		cfg.Impersonate.Groups = append([]string(nil), o.Groups...)
-	}
-
-	if len(cfg.Impersonate.Groups) > 0 && cfg.Impersonate.UserName == "" {
-		return fmt.Errorf("--as-group requires --as or an impersonated user in the kubeconfig")
-	}
-
-	return nil
-}
+type ImpersonationOptions = factory.ImpersonationOptions
 
 func printResourcePermitsApprovalTable(
 	out io.Writer,
