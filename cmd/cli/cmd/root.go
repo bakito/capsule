@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 
-	"github.com/projectcapsule/capsule/cmd/cli/cmd/completion"
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/cordon"
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/factory"
 	"github.com/projectcapsule/capsule/cmd/cli/cmd/namespace"
@@ -23,10 +22,10 @@ import (
 // NewRootCmd creates the root command for the Capsule CLI plugin.
 func NewRootCmd(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "capsule",
-		Short:   "kubectl plugin for Capsule multi-tenancy",
-		Long:    "A CLI and kubectl plugin for managing Capsule Tenants, Namespaces, ResourcePermits, and Resources.",
-		Version: fmt.Sprintf("%s %s%s", capsuleversion.GitTag, capsuleversion.GitCommit, capsuleversion.GitDirty),
+		Use:          "capsule",
+		Short:        "kubectl plugin for Capsule multi-tenancy",
+		Long:         "A CLI and kubectl plugin for managing Capsule Tenants, Namespaces, ResourcePermits, and Resources.",
+		Version:      fmt.Sprintf("%s %s%s", capsuleversion.GitTag, capsuleversion.GitCommit, capsuleversion.GitDirty),
 		SilenceUsage: true,
 	}
 
@@ -42,7 +41,6 @@ func NewRootCmd(f factory.Factory, streams genericclioptions.IOStreams) *cobra.C
 		cordon.NewCmdUncordon(f, streams),
 		resourcepermit.NewCmdResourcePermit(f, streams),
 		version.NewCmdVersion(streams),
-		completion.NewCmdCompletion(streams.Out),
 	)
 
 	return cmd

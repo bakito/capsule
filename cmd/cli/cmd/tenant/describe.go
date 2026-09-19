@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
@@ -19,13 +20,13 @@ import (
 
 type DescribeOptions struct {
 	Factory   factory.Factory
-	IOStreams genericiooptions.IOStreams
+	IOStreams genericclioptions.IOStreams
 
 	Name   string
 	Client ctrlclient.Client
 }
 
-func NewCmdDescribe(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdDescribe(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	o := &DescribeOptions{
 		Factory:   f,
 		IOStreams: streams,
@@ -39,6 +40,7 @@ func NewCmdDescribe(f factory.Factory, streams genericiooptions.IOStreams) *cobr
   kubectl capsule tenant describe oil`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Name = args[0]
+
 			return o.Run(cmd.Context())
 		},
 	}
@@ -60,6 +62,7 @@ func (o *DescribeOptions) Run(ctx context.Context) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("tenant %q not found", o.Name)
 		}
+
 		return err
 	}
 
@@ -71,6 +74,7 @@ func (o *DescribeOptions) Run(ctx context.Context) error {
 	if tnt.Spec.Cordoned {
 		state = "Cordoned"
 	}
+
 	_, _ = fmt.Fprintf(out, "State:\t\t\t%s\n", state)
 
 	// Namespace Options
@@ -78,6 +82,7 @@ func (o *DescribeOptions) Run(ctx context.Context) error {
 	if tnt.Spec.NamespaceOptions != nil && tnt.Spec.NamespaceOptions.Quota != nil {
 		quota = fmt.Sprintf("%d", *tnt.Spec.NamespaceOptions.Quota)
 	}
+
 	_, _ = fmt.Fprintf(out, "Namespace Quota:\t%s\n", quota)
 
 	// Namespaces
@@ -85,6 +90,7 @@ func (o *DescribeOptions) Run(ctx context.Context) error {
 	if tnt.Status.Size > 0 && len(tnt.Status.Spaces) == 0 {
 		nsCount = int(tnt.Status.Size)
 	}
+
 	_, _ = fmt.Fprintf(out, "Namespace Count:\t%d\n", nsCount)
 	if len(tnt.Status.Spaces) > 0 {
 		_, _ = fmt.Fprintln(out, "Namespaces:")
@@ -109,6 +115,7 @@ func (o *DescribeOptions) Run(ctx context.Context) error {
 		for k, v := range tnt.Spec.NodeSelector {
 			selectors = append(selectors, fmt.Sprintf("%s=%s", k, v))
 		}
+
 		sort.Strings(selectors)
 		_, _ = fmt.Fprintf(out, "Node Selector:\t\t%s\n", strings.Join(selectors, ", "))
 	} else {
@@ -116,36 +123,41 @@ func (o *DescribeOptions) Run(ctx context.Context) error {
 	}
 
 	// Ingress Options
-	if tnt.Spec.IngressOptions.AllowedHostnames != nil && len(tnt.Spec.IngressOptions.AllowedHostnames.Allowed) > 0 {
-		_, _ = fmt.Fprintf(out, "Allowed Hostnames:\t%s\n", strings.Join(tnt.Spec.IngressOptions.AllowedHostnames.Allowed, ", "))
+	if tnt.Spec.IngressOptions.AllowedHostnames != nil && len(tnt.Spec.IngressOptions.AllowedHostnames.Exact) > 0 {
+		_, _ = fmt.Fprintf(out, "Allowed Hostnames:\t%s\n", strings.Join(tnt.Spec.IngressOptions.AllowedHostnames.Exact, ", "))
 	}
-	if tnt.Spec.IngressOptions.AllowedClasses != nil && len(tnt.Spec.IngressOptions.AllowedClasses.Allowed) > 0 {
-		_, _ = fmt.Fprintf(out, "Allowed Ingress Classes:%s\n", strings.Join(tnt.Spec.IngressOptions.AllowedClasses.Allowed, ", "))
+
+	if tnt.Spec.IngressOptions.AllowedClasses != nil && len(tnt.Spec.IngressOptions.AllowedClasses.Exact) > 0 {
+		_, _ = fmt.Fprintf(out, "Allowed Ingress Classes:%s\n", strings.Join(tnt.Spec.IngressOptions.AllowedClasses.Exact, ", "))
 	}
 
 	// Storage Options
-	if tnt.Spec.StorageClasses != nil && len(tnt.Spec.StorageClasses.Allowed) > 0 {
-		_, _ = fmt.Fprintf(out, "Allowed Storage Classes:%s\n", strings.Join(tnt.Spec.StorageClasses.Allowed, ", "))
+	if tnt.Spec.StorageClasses != nil && len(tnt.Spec.StorageClasses.Exact) > 0 {
+		_, _ = fmt.Fprintf(out, "Allowed Storage Classes:%s\n", strings.Join(tnt.Spec.StorageClasses.Exact, ", "))
 	}
 
 	// Container Registries
 	if tnt.Spec.ContainerRegistries != nil {
-		if len(tnt.Spec.ContainerRegistries.Allowed) > 0 {
-			_, _ = fmt.Fprintf(out, "Allowed Registries:\t%s\n", strings.Join(tnt.Spec.ContainerRegistries.Allowed, ", "))
+		if len(tnt.Spec.ContainerRegistries.Exact) > 0 {
+			_, _ = fmt.Fprintf(out, "Allowed Registries:\t%s\n", strings.Join(tnt.Spec.ContainerRegistries.Exact, ", "))
 		}
-		if len(tnt.Spec.ContainerRegistries.AllowedRegex) > 0 {
-			_, _ = fmt.Fprintf(out, "Allowed Registries Regex:%s\n", strings.Join(tnt.Spec.ContainerRegistries.AllowedRegex, ", "))
+
+		if tnt.Spec.ContainerRegistries.Regex != "" {
+			_, _ = fmt.Fprintf(out, "Allowed Registries Regex:%s\n", tnt.Spec.ContainerRegistries.Regex)
 		}
 	}
 
 	// Labels
 	if len(tnt.Labels) > 0 {
 		_, _ = fmt.Fprintln(out, "Labels:")
+
 		var keys []string
 		for k := range tnt.Labels {
 			keys = append(keys, k)
 		}
+
 		sort.Strings(keys)
+
 		for _, k := range keys {
 			_, _ = fmt.Fprintf(out, "  %s=%s\n", k, tnt.Labels[k])
 		}
@@ -154,11 +166,14 @@ func (o *DescribeOptions) Run(ctx context.Context) error {
 	// Annotations
 	if len(tnt.Annotations) > 0 {
 		_, _ = fmt.Fprintln(out, "Annotations:")
+
 		var keys []string
 		for k := range tnt.Annotations {
 			keys = append(keys, k)
 		}
+
 		sort.Strings(keys)
+
 		for _, k := range keys {
 			_, _ = fmt.Fprintf(out, "  %s: %s\n", k, tnt.Annotations[k])
 		}

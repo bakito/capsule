@@ -40,7 +40,7 @@ func TestCordonTenant(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tnt).Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 
@@ -80,7 +80,7 @@ func TestCordonNamespace(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns, tnt).Build()
 
 	t.Run("cordon namespace", func(t *testing.T) {
-		streams, _, out, _ := genericclioptions.NewTestIOStreams()
+		streams, _, _, _ := genericclioptions.NewTestIOStreams()
 		var buf bytes.Buffer
 		streams.Out = &buf
 
@@ -102,7 +102,7 @@ func TestCordonNamespace(t *testing.T) {
 	})
 
 	t.Run("uncordon namespace with warning for cordoned parent tenant", func(t *testing.T) {
-		streams, _, out, errOut := genericclioptions.NewTestIOStreams()
+		streams, _, _, _ := genericclioptions.NewTestIOStreams()
 		var buf bytes.Buffer
 		var errBuf bytes.Buffer
 		streams.Out = &buf
@@ -141,7 +141,7 @@ func TestCordonGlobalTenantResource(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gtr).Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 
@@ -179,7 +179,7 @@ func TestCordonTenantResource(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tr).Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 

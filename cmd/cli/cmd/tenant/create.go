@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/cli-runtime/pkg/genericiooptions"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
@@ -21,19 +21,19 @@ import (
 
 type CreateOptions struct {
 	Factory   factory.Factory
-	IOStreams genericiooptions.IOStreams
+	IOStreams genericclioptions.IOStreams
 
 	Name                   string
 	Owners                 []string
 	NamespaceQuota         int32
 	NodeSelectors          map[string]string
 	AllowedRegistries      []string
-	AllowedRegistriesRegex []string
+	AllowedRegistriesRegex string
 
 	Client ctrlclient.Client
 }
 
-func NewCmdCreate(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdCreate(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	o := &CreateOptions{
 		Factory:   f,
 		IOStreams: streams,
@@ -50,6 +50,7 @@ func NewCmdCreate(f factory.Factory, streams genericiooptions.IOStreams) *cobra.
   kubectl capsule tenant create gas --owner User:bob --namespace-quota 5 --node-selector disk=ssd`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Name = args[0]
+
 			return o.Run(cmd.Context())
 		},
 	}
@@ -58,7 +59,7 @@ func NewCmdCreate(f factory.Factory, streams genericiooptions.IOStreams) *cobra.
 	cmd.Flags().Int32Var(&o.NamespaceQuota, "namespace-quota", 0, "Hard quota of namespaces for this tenant")
 	cmd.Flags().StringToStringVar(&o.NodeSelectors, "node-selector", nil, "Node selector key-value pairs (e.g. key=value)")
 	cmd.Flags().StringArrayVar(&o.AllowedRegistries, "allowed-registries", nil, "Allowed container registries")
-	cmd.Flags().StringArrayVar(&o.AllowedRegistriesRegex, "allowed-registries-regex", nil, "Allowed container registries regex")
+	cmd.Flags().StringVar(&o.AllowedRegistriesRegex, "allowed-registries-regex", "", "Allowed container registries regex")
 
 	return cmd
 }
@@ -81,8 +82,11 @@ func (o *CreateOptions) Run(ctx context.Context) error {
 
 	for _, ownerStr := range o.Owners {
 		parts := strings.SplitN(ownerStr, ":", 2)
-		var kind rbac.OwnerKind
-		var name string
+
+		var (
+			kind rbac.OwnerKind
+			name string
+		)
 
 		if len(parts) == 2 {
 			k := strings.ToLower(parts[0])
@@ -96,6 +100,7 @@ func (o *CreateOptions) Run(ctx context.Context) error {
 			default:
 				return fmt.Errorf("invalid owner kind %q; expected User, Group, or ServiceAccount", parts[0])
 			}
+
 			name = parts[1]
 		} else {
 			kind = rbac.UserOwner
@@ -123,10 +128,10 @@ func (o *CreateOptions) Run(ctx context.Context) error {
 		tnt.Spec.NodeSelector = o.NodeSelectors
 	}
 
-	if len(o.AllowedRegistries) > 0 || len(o.AllowedRegistriesRegex) > 0 {
+	if len(o.AllowedRegistries) > 0 || o.AllowedRegistriesRegex != "" {
 		tnt.Spec.ContainerRegistries = &api.AllowedListSpec{
-			Allowed:      o.AllowedRegistries,
-			AllowedRegex: o.AllowedRegistriesRegex,
+			Exact: o.AllowedRegistries,
+			Regex: o.AllowedRegistriesRegex,
 		}
 	}
 
@@ -135,5 +140,6 @@ func (o *CreateOptions) Run(ctx context.Context) error {
 	}
 
 	_, _ = fmt.Fprintf(o.IOStreams.Out, "tenant.capsule.clastix.io/%s created\n", tnt.Name)
+
 	return nil
 }

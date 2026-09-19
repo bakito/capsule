@@ -11,7 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
@@ -21,14 +21,14 @@ import (
 
 type AddOptions struct {
 	Factory   factory.Factory
-	IOStreams genericiooptions.IOStreams
+	IOStreams genericclioptions.IOStreams
 
 	Namespace  string
 	TenantName string
 	Client     ctrlclient.Client
 }
 
-func NewCmdAdd(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdAdd(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	o := &AddOptions{
 		Factory:   f,
 		IOStreams: streams,
@@ -43,6 +43,7 @@ func NewCmdAdd(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Com
   kubectl capsule namespace add backend-dev --tenant oil`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Namespace = args[0]
+
 			return o.Run(cmd.Context())
 		},
 	}
@@ -55,7 +56,7 @@ func NewCmdAdd(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Com
 
 func (o *AddOptions) Run(ctx context.Context) error {
 	var err error
-	if o.Client == nil {
+	if o.Client == nil && o.Factory != nil {
 		o.Client, err = o.Factory.ToControllerRuntimeClient()
 		if err != nil {
 			return err
@@ -71,6 +72,7 @@ func (o *AddOptions) Run(ctx context.Context) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("tenant %q not found", o.TenantName)
 		}
+
 		return fmt.Errorf("failed to get tenant %q: %w", o.TenantName, err)
 	}
 
@@ -83,6 +85,7 @@ func (o *AddOptions) Run(ctx context.Context) error {
 		if tnt.Status.Size > 0 && currentSize == 0 {
 			currentSize = int(tnt.Status.Size)
 		}
+
 		if int32(currentSize) >= *tnt.Spec.NamespaceOptions.Quota {
 			return fmt.Errorf("cannot add namespace to tenant %q: namespace quota (%d) exceeded",
 				o.TenantName, *tnt.Spec.NamespaceOptions.Quota)
@@ -94,14 +97,17 @@ func (o *AddOptions) Run(ctx context.Context) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("namespace %q not found", o.Namespace)
 		}
+
 		return fmt.Errorf("failed to get namespace %q: %w", o.Namespace, err)
 	}
 
 	currentTenant := ns.Labels[meta.TenantLabel]
 	if currentTenant == o.TenantName {
 		_, _ = fmt.Fprintf(o.IOStreams.Out, "namespace/%s is already added to tenant %s\n", ns.Name, o.TenantName)
+
 		return nil
 	}
+
 	if currentTenant != "" {
 		return fmt.Errorf("namespace %q is already part of tenant %q; use 'namespace move' to migrate between tenants",
 			o.Namespace, currentTenant)
@@ -112,6 +118,7 @@ func (o *AddOptions) Run(ctx context.Context) error {
 	if ns.Labels == nil {
 		ns.Labels = make(map[string]string)
 	}
+
 	ns.Labels[meta.TenantLabel] = tnt.Name
 
 	ownerRef := metav1.OwnerReference{
@@ -119,15 +126,17 @@ func (o *AddOptions) Run(ctx context.Context) error {
 		Kind:               "Tenant",
 		Name:               tnt.Name,
 		UID:                tnt.UID,
-		BlockOwnerDeletion: ptr.To(true),
+		BlockOwnerDeletion: new(true),
 	}
 
 	var newOwnerRefs []metav1.OwnerReference
+
 	for _, ref := range ns.OwnerReferences {
 		if ref.Kind != "Tenant" {
 			newOwnerRefs = append(newOwnerRefs, ref)
 		}
 	}
+
 	newOwnerRefs = append(newOwnerRefs, ownerRef)
 	ns.OwnerReferences = newOwnerRefs
 
@@ -136,5 +145,6 @@ func (o *AddOptions) Run(ctx context.Context) error {
 	}
 
 	_, _ = fmt.Fprintf(o.IOStreams.Out, "namespace/%s added to tenant %s\n", ns.Name, o.TenantName)
+
 	return nil
 }

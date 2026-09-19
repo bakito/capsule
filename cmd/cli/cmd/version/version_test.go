@@ -15,14 +15,12 @@ import (
 func TestVersionCmd(t *testing.T) {
 	t.Parallel()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
-	cmd := NewCmdVersion(streams)
-
-	cmd.SetOut(out)
-	cmd.SetErr(out)
-
 	var buf bytes.Buffer
-	streams.Out = &buf
+	streams := genericclioptions.IOStreams{
+		Out:    &buf,
+		ErrOut: &buf,
+	}
+	cmd := NewCmdVersion(streams)
 
 	err := cmd.Execute()
 	require.NoError(t, err)

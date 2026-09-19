@@ -34,5 +34,4 @@ func TestNewRootCmd(t *testing.T) {
 	assert.True(t, subcommands["uncordon"])
 	assert.True(t, subcommands["resource-permit"])
 	assert.True(t, subcommands["version"])
-	assert.True(t, subcommands["completion"])
 }

@@ -5,6 +5,7 @@ package resourcepermit
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -59,20 +60,25 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	})
 }
 
-// NewCmdActivate returns the activate subcommand.
-func NewCmdActivate(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
+func newActionCmd(
+	f factory.Factory,
+	streams genericclioptions.IOStreams,
+	phase capsulev1beta2.ResourcePermitPhase,
+	use string,
+	short string,
+	example string,
+) *cobra.Command {
 	o := &ActionOptions{
 		Factory:   f,
 		IOStreams: streams,
-		Phase:     capsulev1beta2.ResourcePermitPhaseActive,
+		Phase:     phase,
 	}
 
 	cmd := &cobra.Command{
-		Use:   "activate NAME [flags]",
-		Short: "Activate a ResourcePermit",
-		Args:  cobra.ExactArgs(1),
-		Example: `  # Activate an existing ResourcePermit
-  kubectl capsule resource-permit activate grant-admin --namespace default`,
+		Use:     fmt.Sprintf("%s NAME [flags]", use),
+		Short:   short,
+		Args:    cobra.ExactArgs(1),
+		Example: example,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Name = args[0]
 			return o.Run(cmd.Context())
@@ -82,4 +88,16 @@ func NewCmdActivate(f factory.Factory, streams genericclioptions.IOStreams) *cob
 	cmd.Flags().StringVarP(&o.Namespace, "namespace", "n", "", "Namespace of the ResourcePermit")
 
 	return cmd
+}
+
+// NewCmdActivate returns the activate subcommand.
+func NewCmdActivate(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
+	return newActionCmd(
+		f,
+		streams,
+		capsulev1beta2.ResourcePermitPhaseActive,
+		"activate",
+		"Activate a ResourcePermit",
+		"  # Activate an existing ResourcePermit\n  kubectl capsule resource-permit activate grant-admin --namespace default",
+	)
 }

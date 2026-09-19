@@ -6,7 +6,6 @@ package resourcepermit
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"strings"
 
@@ -16,7 +15,6 @@ import (
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
-	"k8s.io/client-go/rest"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
@@ -168,26 +166,6 @@ func colorize(src string, it chroma.Iterator) string {
 	}
 
 	return buf.String()
-}
-
-type impersonationOptions struct {
-	User   string
-	Groups []string
-}
-
-func (o impersonationOptions) applyTo(cfg *rest.Config) error {
-	if o.User != "" {
-		cfg.Impersonate.UserName = o.User
-		cfg.Impersonate.Groups = append([]string(nil), o.Groups...)
-	} else if len(o.Groups) > 0 {
-		cfg.Impersonate.Groups = append([]string(nil), o.Groups...)
-	}
-
-	if len(cfg.Impersonate.Groups) > 0 && cfg.Impersonate.UserName == "" {
-		return fmt.Errorf("--as-group requires --as or an impersonated user in the kubeconfig")
-	}
-
-	return nil
 }
 
 func patchResourcePermitStatus(

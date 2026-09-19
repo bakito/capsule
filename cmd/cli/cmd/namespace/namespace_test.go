@@ -46,7 +46,7 @@ func TestNamespaceAdd(t *testing.T) {
 			},
 		},
 		Status: capsulev1beta2.TenantStatus{
-			Spaces: []capsulev1beta2.TenantStatusNamespaceItem{
+			Spaces: []*capsulev1beta2.TenantStatusNamespaceItem{
 				{Name: "oil-prod"},
 			},
 		},
@@ -62,7 +62,7 @@ func TestNamespaceAdd(t *testing.T) {
 		WithObjects(tnt, ns).
 		Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 
@@ -101,7 +101,7 @@ func TestNamespaceAddErrors(t *testing.T) {
 			NamespaceOptions: &capsulev1beta2.NamespaceOptions{Quota: &quota},
 		},
 		Status: capsulev1beta2.TenantStatus{
-			Spaces: []capsulev1beta2.TenantStatusNamespaceItem{{Name: "solar-ns1"}},
+			Spaces: []*capsulev1beta2.TenantStatusNamespaceItem{{Name: "solar-ns1"}},
 		},
 	}
 	ns := &corev1.Namespace{
@@ -178,7 +178,7 @@ func TestNamespaceMove(t *testing.T) {
 		WithObjects(tenantA, tenantB, ns).
 		Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 
@@ -229,7 +229,7 @@ func TestNamespaceRemove(t *testing.T) {
 		WithObjects(ns).
 		Build()
 
-	streams, _, out, _ := genericclioptions.NewTestIOStreams()
+	streams, _, _, _ := genericclioptions.NewTestIOStreams()
 	var buf bytes.Buffer
 	streams.Out = &buf
 

@@ -66,6 +66,7 @@ func NewCmdReview(f factory.Factory, streams genericclioptions.IOStreams) *cobra
     --as alice@example.com --as-group platform-engineers`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Name = args[0]
+
 			return o.Run(cmd.Context())
 		},
 	}
@@ -97,6 +98,7 @@ func (o *ReviewOptions) Run(ctx context.Context) error {
 		ns, _, _ := o.Factory.Namespace()
 		o.Namespace = ns
 	}
+
 	if o.Namespace == "" {
 		o.Namespace = "default"
 	}
@@ -173,6 +175,7 @@ func (o *ReviewOptions) Run(ctx context.Context) error {
 		printResourcePermitsApprovalTable(o.IOStreams.Out, br, props, !o.NoColor)
 
 		reader := bufio.NewReader(o.IOStreams.In)
+
 		for {
 			_, _ = fmt.Fprint(o.IOStreams.Out, "Approve this request? [y/n]: ")
 
@@ -184,9 +187,11 @@ func (o *ReviewOptions) Run(ctx context.Context) error {
 			input = strings.ToLower(strings.TrimSpace(input))
 			if input == "y" {
 				action = approveValue
+
 				break
 			} else if input == "n" {
 				action = denyValue
+
 				break
 			} else {
 				_, _ = fmt.Fprintln(o.IOStreams.Out, "Invalid input. Please type 'y' or 'n'.")

@@ -11,7 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	capsulev1beta2 "github.com/projectcapsule/capsule/api/v1beta2"
@@ -21,7 +21,7 @@ import (
 
 type MoveOptions struct {
 	Factory   factory.Factory
-	IOStreams genericiooptions.IOStreams
+	IOStreams genericclioptions.IOStreams
 
 	Namespace    string
 	TargetTenant string
@@ -31,7 +31,7 @@ type MoveOptions struct {
 	Client ctrlclient.Client
 }
 
-func NewCmdMove(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Command {
+func NewCmdMove(f factory.Factory, streams genericclioptions.IOStreams) *cobra.Command {
 	o := &MoveOptions{
 		Factory:   f,
 		IOStreams: streams,
@@ -49,6 +49,7 @@ func NewCmdMove(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Co
   kubectl capsule namespace move backend-dev --from oil --to gas`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Namespace = args[0]
+
 			return o.Run(cmd.Context())
 		},
 	}
@@ -63,7 +64,7 @@ func NewCmdMove(f factory.Factory, streams genericiooptions.IOStreams) *cobra.Co
 
 func (o *MoveOptions) Run(ctx context.Context) error {
 	var err error
-	if o.Client == nil {
+	if o.Client == nil && o.Factory != nil {
 		o.Client, err = o.Factory.ToControllerRuntimeClient()
 		if err != nil {
 			return err
@@ -79,6 +80,7 @@ func (o *MoveOptions) Run(ctx context.Context) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("target tenant %q not found", o.TargetTenant)
 		}
+
 		return fmt.Errorf("failed to get target tenant %q: %w", o.TargetTenant, err)
 	}
 
@@ -91,6 +93,7 @@ func (o *MoveOptions) Run(ctx context.Context) error {
 		if targetTnt.Status.Size > 0 && currentSize == 0 {
 			currentSize = int(targetTnt.Status.Size)
 		}
+
 		if int32(currentSize) >= *targetTnt.Spec.NamespaceOptions.Quota {
 			return fmt.Errorf("cannot move namespace to tenant %q: namespace quota (%d) exceeded",
 				o.TargetTenant, *targetTnt.Spec.NamespaceOptions.Quota)
@@ -102,12 +105,14 @@ func (o *MoveOptions) Run(ctx context.Context) error {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("namespace %q not found", o.Namespace)
 		}
+
 		return fmt.Errorf("failed to get namespace %q: %w", o.Namespace, err)
 	}
 
 	currentTenant := ns.Labels[meta.TenantLabel]
 	if currentTenant == o.TargetTenant {
 		_, _ = fmt.Fprintf(o.IOStreams.Out, "namespace/%s is already in tenant %s\n", ns.Name, o.TargetTenant)
+
 		return nil
 	}
 
@@ -121,6 +126,7 @@ func (o *MoveOptions) Run(ctx context.Context) error {
 	if ns.Labels == nil {
 		ns.Labels = make(map[string]string)
 	}
+
 	ns.Labels[meta.TenantLabel] = targetTnt.Name
 
 	ownerRef := metav1.OwnerReference{
@@ -128,15 +134,17 @@ func (o *MoveOptions) Run(ctx context.Context) error {
 		Kind:               "Tenant",
 		Name:               targetTnt.Name,
 		UID:                targetTnt.UID,
-		BlockOwnerDeletion: ptr.To(true),
+		BlockOwnerDeletion: new(true),
 	}
 
 	var newOwnerRefs []metav1.OwnerReference
+
 	for _, ref := range ns.OwnerReferences {
 		if ref.Kind != "Tenant" {
 			newOwnerRefs = append(newOwnerRefs, ref)
 		}
 	}
+
 	newOwnerRefs = append(newOwnerRefs, ownerRef)
 	ns.OwnerReferences = newOwnerRefs
 
@@ -145,5 +153,6 @@ func (o *MoveOptions) Run(ctx context.Context) error {
 	}
 
 	_, _ = fmt.Fprintf(o.IOStreams.Out, "namespace/%s moved to tenant %s\n", ns.Name, o.TargetTenant)
+
 	return nil
 }

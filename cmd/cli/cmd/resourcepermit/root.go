@@ -27,11 +27,10 @@ func NewCmdResourcePermit(f factory.Factory, streams genericclioptions.IOStreams
 		Use:     "resource-permit",
 		Aliases: []string{"resourcepermit", "rp", "permit"},
 		Short:   "Manage ResourcePermits",
-		Long:    "Get, review, activate, expire, and retry ResourcePermits.",
+		Long:    "Review, activate, expire, and retry ResourcePermits.",
 	}
 
 	cmd.AddCommand(
-		NewCmdGet(f, streams),
 		NewCmdReview(f, streams),
 		NewCmdActivate(f, streams),
 		NewCmdExpire(f, streams),
