@@ -39,6 +39,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		ns, _, _ := o.Factory.Namespace()
 		o.Namespace = ns
 	}
+
 	if o.Namespace == "" {
 		o.Namespace = "default"
 	}
@@ -55,6 +56,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 
 		return patchResourcePermitStatus(ctx, o.Client, br, func() error {
 			br.Status.Phase = o.Phase
+
 			return nil
 		})
 	})
@@ -81,6 +83,7 @@ func newActionCmd(
 		Example: example,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Name = args[0]
+
 			return o.Run(cmd.Context())
 		},
 	}

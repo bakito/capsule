@@ -66,7 +66,7 @@ func NewCmdCreate(f factory.Factory, streams genericclioptions.IOStreams) *cobra
 
 func (o *CreateOptions) Run(ctx context.Context) error {
 	var err error
-	if o.Client == nil {
+	if o.Client == nil && o.Factory != nil {
 		o.Client, err = o.Factory.ToControllerRuntimeClient()
 		if err != nil {
 			return err
@@ -81,40 +81,12 @@ func (o *CreateOptions) Run(ctx context.Context) error {
 	}
 
 	for _, ownerStr := range o.Owners {
-		parts := strings.SplitN(ownerStr, ":", 2)
-
-		var (
-			kind rbac.OwnerKind
-			name string
-		)
-
-		if len(parts) == 2 {
-			k := strings.ToLower(parts[0])
-			switch k {
-			case "user":
-				kind = rbac.UserOwner
-			case "group":
-				kind = rbac.GroupOwner
-			case "serviceaccount":
-				kind = rbac.ServiceAccountOwner
-			default:
-				return fmt.Errorf("invalid owner kind %q; expected User, Group, or ServiceAccount", parts[0])
-			}
-
-			name = parts[1]
-		} else {
-			kind = rbac.UserOwner
-			name = parts[0]
+		ownerSpec, err := o.parseOwner(ownerStr)
+		if err != nil {
+			return err
 		}
 
-		tnt.Spec.Owners = append(tnt.Spec.Owners, rbac.OwnerSpec{
-			CoreOwnerSpec: rbac.CoreOwnerSpec{
-				UserSpec: rbac.UserSpec{
-					Kind: kind,
-					Name: name,
-				},
-			},
-		})
+		tnt.Spec.Owners = append(tnt.Spec.Owners, ownerSpec)
 	}
 
 	if o.NamespaceQuota > 0 {
@@ -129,6 +101,7 @@ func (o *CreateOptions) Run(ctx context.Context) error {
 	}
 
 	if len(o.AllowedRegistries) > 0 || o.AllowedRegistriesRegex != "" {
+		//nolint:staticcheck // support deprecated container registries field for backwards compatibility
 		tnt.Spec.ContainerRegistries = &api.AllowedListSpec{
 			Exact: o.AllowedRegistries,
 			Regex: o.AllowedRegistriesRegex,
@@ -142,4 +115,41 @@ func (o *CreateOptions) Run(ctx context.Context) error {
 	_, _ = fmt.Fprintf(o.IOStreams.Out, "tenant.capsule.clastix.io/%s created\n", tnt.Name)
 
 	return nil
+}
+
+func (o *CreateOptions) parseOwner(ownerStr string) (rbac.OwnerSpec, error) {
+	parts := strings.SplitN(ownerStr, ":", 2)
+
+	var kind rbac.OwnerKind
+
+	var name string
+
+	if len(parts) == 2 {
+		k := strings.ToLower(parts[0])
+
+		switch k {
+		case "user":
+			kind = rbac.UserOwner
+		case "group":
+			kind = rbac.GroupOwner
+		case "serviceaccount":
+			kind = rbac.ServiceAccountOwner
+		default:
+			return rbac.OwnerSpec{}, fmt.Errorf("invalid owner kind %q; expected User, Group, or ServiceAccount", parts[0])
+		}
+
+		name = parts[1]
+	} else {
+		kind = rbac.UserOwner
+		name = parts[0]
+	}
+
+	return rbac.OwnerSpec{
+		CoreOwnerSpec: rbac.CoreOwnerSpec{
+			UserSpec: rbac.UserSpec{
+				Kind: kind,
+				Name: name,
+			},
+		},
+	}, nil
 }

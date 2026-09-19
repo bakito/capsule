@@ -86,7 +86,7 @@ func (o *AddOptions) Run(ctx context.Context) error {
 			currentSize = int(tnt.Status.Size)
 		}
 
-		if int32(currentSize) >= *tnt.Spec.NamespaceOptions.Quota {
+		if int64(currentSize) >= int64(*tnt.Spec.NamespaceOptions.Quota) {
 			return fmt.Errorf("cannot add namespace to tenant %q: namespace quota (%d) exceeded",
 				o.TenantName, *tnt.Spec.NamespaceOptions.Quota)
 		}

@@ -155,6 +155,7 @@ func colorize(src string, it chroma.Iterator) string {
 	if style == nil {
 		style = styles.Fallback
 	}
+
 	formatter := formatters.Get("terminal16m")
 	if formatter == nil {
 		formatter = formatters.Fallback

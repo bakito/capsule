@@ -94,7 +94,7 @@ func (o *MoveOptions) Run(ctx context.Context) error {
 			currentSize = int(targetTnt.Status.Size)
 		}
 
-		if int32(currentSize) >= *targetTnt.Spec.NamespaceOptions.Quota {
+		if int64(currentSize) >= int64(*targetTnt.Spec.NamespaceOptions.Quota) {
 			return fmt.Errorf("cannot move namespace to tenant %q: namespace quota (%d) exceeded",
 				o.TargetTenant, *targetTnt.Spec.NamespaceOptions.Quota)
 		}
