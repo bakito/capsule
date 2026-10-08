@@ -22,6 +22,7 @@ import (
 	ad "github.com/projectcapsule/capsule/pkg/runtime/admission"
 	"github.com/projectcapsule/capsule/pkg/runtime/events"
 	"github.com/projectcapsule/capsule/pkg/runtime/handlers"
+	"github.com/projectcapsule/capsule/pkg/users"
 )
 
 type genericObject = *metav1.PartialObjectMetadata
@@ -56,10 +57,12 @@ type genericRules struct {
 	regexCache      *cache.RegexCache
 	managedMetadata meta.ManagedMetadata
 	objectSkipRules []meta.ObjectSkipRule
+	compiler        ruleengine.ConditionCompiler
 }
 
 func GenericRules(
 	regexCache *cache.RegexCache,
+	compilers ...ruleengine.ConditionCompiler,
 ) handlers.TypedHandlerWithTenantWithRuleset[genericObject] {
 	if regexCache == nil {
 		regexCache = cache.NewRegexCache()
@@ -73,6 +76,10 @@ func GenericRules(
 
 	h.rules = []genericRuleValidator{
 		h.validateMetadata,
+		h.validateWorkloadTypes,
+	}
+	if len(compilers) > 0 {
+		h.compiler = compilers[0]
 	}
 
 	return h
@@ -153,17 +160,51 @@ func (h *genericRules) validateGenericRules(
 	recorder events.EventRecorder,
 	enforceBodies []*apirules.NamespaceRuleEnforceBody,
 ) error {
-	if obj == nil {
+	if obj == nil || !matchesGenericMetadataRequest(req) {
 		return nil
 	}
 
 	obj.SetGroupVersionKind(gvk)
 
-	if meta.ShouldSkipObjectByRules(obj, h.objectSkipRules) {
+	// Managed labels are bookkeeping, not proof of who submitted the object.
+	// Only the authenticated Capsule controller may skip metadata enforcement;
+	// workload type policies still apply to its requests.
+	skipMetadata := meta.ShouldSkipObjectByRules(obj, h.objectSkipRules) && users.IsControllerServiceAccount(req.UserInfo.Username)
+	if skipMetadata && !hasWorkloadTypePolicy(gvk, enforceBodies) {
 		return nil
 	}
 
-	for _, evaluate := range h.rules {
+	var err error
+
+	enforceBodies, err = ruleengine.FilterEnforcementConditions(ctx,
+		ruleengine.NewConditionEvaluator(h.compiler, req.AdmissionRequest), nil, enforceBodies,
+		func(body *apirules.NamespaceRuleEnforceBody) bool {
+			if _, supported := workloadTypeForGVK(gvk); supported && workloadKindRuleApplies(gvk, body) {
+				return true
+			}
+
+			if skipMetadata {
+				return false
+			}
+
+			for _, metadata := range body.Metadata {
+				if metadata.MatchesGroupVersionKind(gvk) {
+					return true
+				}
+			}
+
+			return false
+		})
+	if err != nil {
+		return fmt.Errorf("enforce: %w", err)
+	}
+
+	validators := h.rules
+	if skipMetadata {
+		validators = []genericRuleValidator{h.validateWorkloadTypes}
+	}
+
+	for _, evaluate := range validators {
 		evaluation, err := evaluate(oldObj, obj, gvk, enforceBodies)
 		if err != nil {
 			return err

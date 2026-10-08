@@ -6,7 +6,7 @@ home: https://projectcapsule.dev/
 icon: https://github.com/projectcapsule/capsule/raw/main/assets/logo/capsule_small.png
 dependencies:
   - name: capsule-proxy
-    version: 0.14.1
+    version: 0.15.0
     repository: "oci://ghcr.io/projectcapsule/charts"
     condition: proxy.enabled
     alias: proxy
@@ -40,5 +40,33 @@ annotations:
     - name: Documentation
       url: https://projectcapsule.dev/
   artifacthub.io/changes: |
+    - kind: fixed
+      description: declare generic rule webhook side effects as NoneOnDryRun and suppress NetworkPolicy audit and denial Events for dry runs
     - kind: added
-      description: added toggles for podSecurityContexts and securityContexts
+      description: enforce PDB overlap, eviction allowance and unhealthy Pod policies through namespace workload rules
+    - kind: added
+      description: extend workload targets to native controller templates and kind-only allow, deny, and audit rules
+    - kind: added
+      description: added scheduler workload mutation with empty-only merge and conditional replacement for namespace profiles
+    - kind: fixed
+      description: bind managed-object rule exemptions to the Capsule controller identity and protect both managed label values on namespaces and namespaced resources
+    - kind: fixed
+      description: preserve controller startup when optional DeviceClass discovery fails
+    - kind: fixed
+      description: reject malformed Service forbidden metadata regexes on Tenant admission and fail closed for stored invalid deny patterns
+    - kind: fixed
+      description: support DeviceClass admission and status with resource.k8s.io/v1beta2 on Kubernetes 1.33 while retaining v1
+    - kind: changed
+      description: consolidate admission conditions at mutate entry and enforce level; migrate nested workload and service conditions before upgrading
+    - kind: security
+      description: validate replication tracking and protection markers on resource creation
+    - kind: fixed
+      description: preserve legacy replication admission matching and independent protection for targets shared with ResourcePermits
+    - kind: added
+      description: added CEL apply conditions to TenantResource and GlobalTenantResource policies
+    - kind: added
+      description: added per-resource SSA policy to TenantResource and GlobalTenantResource, with legacy settings fallback
+    - kind: added
+      description: added typed workload placement mutations with merge/replace actions, resource conditions, and enforcement rules
+    - kind: added
+      description: added hostUsers workload mutation and clarified mutation actions and diagnostics

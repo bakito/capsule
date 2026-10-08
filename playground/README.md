@@ -83,7 +83,7 @@ password; enter the email address in Dex's login form:
 | `bob@projectcapsule.dev` | `bob` | `bob` | Owns `green` |
 | `gatsby@projectcapsule.dev` | `gatsby` | `gatsby` | Owns `wind`; also sees the `solar` namespaces shared by the sample proxy rule |
 | `renewable@projectcapsule.dev` | `renewable` | `renewable` | Authenticates as the local `renewable` user |
-| `admin@example.com` | `admin` | `admin` | Authenticates successfully but has no elevated Kubernetes RBAC by default |
+| `admin@projectcapsule.dev` | `admin` | `admin` | Authenticates successfully but has no elevated Kubernetes RBAC by default |
 
 The setup generates one persistent local CA under `installation/.generated/`
 and reuses it for Dex, Headlamp, Capsule, Capsule Proxy, and kube-apiserver OIDC trust.
@@ -120,15 +120,17 @@ make apply           # reapply playground configuration after editing it
 make dev-capsule     # rebuild and redeploy only Capsule from the current checkout
 make capsule-stable  # return Capsule to the pinned Flux-managed release
 make down            # delete the kind cluster
+make select-laptop-host-ip   # select the laptop IP and save it to .env (root directory)
 ```
 
 ## Developing Capsule in the playground
 
-`make dev` first performs the normal playground setup, including the platform
-and user examples, and then builds the Capsule controller with `ko`. The image
+`make dev` first installs the playground infrastructure, then builds the Capsule
+controller with `ko` before applying the platform and user examples. The image
 is loaded directly into the kind nodes and the release is upgraded from the
 local `../charts/capsule` chart. Local chart templates and CRDs are therefore
-deployed together with the controller code.
+deployed together with the controller code, before examples that use the current
+rules API are created.
 
 While a development build is installed, reconciliation of the `capsule`
 HelmRelease is suspended so Flux cannot replace it with the pinned chart. The
@@ -147,7 +149,8 @@ to this playground target.
 
 The repository root's legacy `make dev-setup` target uses a different handoff:
 it runs the Capsule controller on the workstation and points admission webhooks
-at `LAPTOP_HOST_IP`. Before installing that development release, it waits for
+at `LAPTOP_HOST_IP`. Use `make select-laptop-host-ip` (in the root directory) to select and persist this IP in `.env`.
+Before installing that development release, it waits for
 `flux-system/capsule` to become ready and deletes only that HelmRelease. Waiting
 for deletion lets the Flux Helm controller finish uninstalling the pinned
 release before local Helm takes ownership. All other playground HelmReleases
@@ -271,3 +274,116 @@ kubectl --context kind-capsule delete globaltenantresource solar-gateway-api-acc
 
 These templates do not retain expired requests. Grafana cleanup deletes the
 dedicated namespace and everything in it.
+
+## Workload targets
+
+The `solar` tenant's test profile denies DaemonSets with a targets-only rule.
+Its Deployment rule scopes registry checks and memory defaults to regular
+containers in the template. Production namespaces do not receive either rule.
+`make apply-user` creates `targeted-deployment` with zero replicas; its stored
+template receives a `32Mi` memory request.
+
+```shell
+kubectl --context kind-capsule --as alice -n solar-test get deployment targeted-deployment -o yaml
+kubectl --context kind-capsule --as alice create --dry-run=server -f user/solar/placement/daemonset-denied.yaml
+kubectl --context kind-capsule --as alice -n solar-test set image deployment/targeted-deployment app=example.com/blocked/app:v1 --dry-run=server
+```
+
+The second command is denied because of the workload kind; the third is denied
+because of the image. The denied DaemonSet example is excluded from the applied
+kustomization. A rule containing workload policies does not also deny the whole
+selected kind. Targets-only `allow` rules form a kind allow-list, so allowing
+Deployments also requires allowing ReplicaSets and Pods for replicas to start.
+
+## Conditional Pod placement
+
+Use `make dev` to install the current controller and CRDs for these examples.
+When upgrading an existing playground, run `make dev-capsule apply-platform apply-user`
+so the Tenant rules are reapplied with the new schema before the Pods.
+
+`make apply-user` creates two Pods in `solar-test` using the placement rule in
+[`platform/tenants/solar.yaml`](platform/tenants/solar.yaml). The rule selects
+namespaces labelled `env: test`; `solar-prod` is outside this profile. The setup
+waits for the effective placement rule before creating the example Pods.
+
+- `placement-default` receives `kubernetes.io/os: linux` when that selector is absent.
+- `placement-shared` also receives `schedulerName: solar-shared-scheduler`, the
+  shared pool selector and toleration because
+  its `placement.example.com/pool` label is `shared`. A scheduling gate keeps this
+  demonstration Pod pending without requiring a custom scheduler or specially
+  labelled nodes.
+
+Set `mutate[].workloads.placement.scheduler` to choose a scheduler for new Pods. With
+`action: merge` (the default), Capsule fills only an empty `schedulerName` and
+preserves all non-empty names, including `default-scheduler`. Kubernetes fills in
+`default-scheduler` before admission. To use another default while preserving
+custom scheduler names, the shared example uses a separate `replace` entry with
+this condition (alongside its shared-pool condition):
+
+```yaml
+apiVersion: capsule.clastix.io/v1beta2
+kind: Tenant
+metadata:
+  name: solar
+spec:
+  owners:
+    - kind: User
+      name: solar-owner
+  rules:
+    - mutate:
+        - action: replace
+          conditions:
+            - name: default-scheduler
+              expression: >-
+                !has(object.spec.schedulerName) || object.spec.schedulerName in ['', 'default-scheduler']
+          workloads:
+            placement:
+              scheduler: solar-shared-scheduler
+```
+
+This also replaces an explicitly selected `default-scheduler`, since admission
+cannot distinguish it from an omitted value. A separate entry keeps the shared
+node selector and toleration independent of the scheduler condition. To always
+set the scheduler, use `replace` without conditions.
+
+Omitting `scheduler` retains the current value. Mutation conditions still apply,
+and the resulting name must pass `enforce.workloads.placement.schedulers` rules. Existing
+Pods and workload templates are not rewritten; controller-created Pods receive
+the scheduler when admitted.
+
+Inspect the admission result:
+
+```console
+kubectl --context kind-capsule --as alice -n solar-test get pod placement-default placement-shared -o yaml
+```
+
+An explicitly forbidden selector is rejected rather than overwritten by the default:
+
+```console
+kubectl --context kind-capsule --as alice -n solar-test run placement-denied --image=registry.k8s.io/pause:3.10 --restart=Never --overrides='{"spec":{"nodeSelector":{"kubernetes.io/os":"windows"}}}' --dry-run=server
+```
+
+Conditions use `{name, expression}` entries. `mutate[].conditions` gates one
+mutation entry; later entries see earlier mutations. `enforce.conditions` gates
+all enforcement blocks in that rule: workloads, services, metadata and ingress.
+A false gate skips only its entry or enforcement rule. Conditions are ANDed;
+use `||` within an expression for alternatives. An evaluation error rejects the
+request unless another condition is false. Use separate rules when resource
+kinds need different conditions, and guard optional fields with `has()`.
+
+Enforcement conditions are checked before metadata/resource defaults during
+mutation, then against the final object during validation. Metadata `managed`
+values under a conditional enforcement rule apply only on matching admission
+requests; background reconciliation cannot evaluate request-dependent conditions.
+Unconditional managed metadata retains its existing reconciliation behavior.
+
+When migrating manifests from the initial placement API, move
+`mutate[].workloads.conditions` to `mutate[].conditions`. Move either
+`enforce.workloads.conditions` or `enforce.services.conditions` to
+`enforce.conditions`. If both exist with different gates, split them into separate
+rules, retaining their namespace selectors, audience and action. Keep blocks that
+need unconditional behavior in separate ungated rules. Export existing rules
+before replacing the CRDs so the old conditions remain available for migration.
+Update stored rules and manifests alongside the controller and CRDs; removed
+nested fields may be pruned by Kubernetes, which would otherwise make those rules
+unconditional.

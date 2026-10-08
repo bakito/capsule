@@ -81,7 +81,9 @@ import (
 	"github.com/projectcapsule/capsule/internal/webhook/route"
 	rulesgenericmutation "github.com/projectcapsule/capsule/internal/webhook/rules/generic/mutation"
 	rulesgenericvalidation "github.com/projectcapsule/capsule/internal/webhook/rules/generic/validation"
+	networkpolicyrules "github.com/projectcapsule/capsule/internal/webhook/rules/networkpolicies/validation"
 	podrules "github.com/projectcapsule/capsule/internal/webhook/rules/pods/validation"
+	pvcrules "github.com/projectcapsule/capsule/internal/webhook/rules/pvc/validation"
 	servicerules "github.com/projectcapsule/capsule/internal/webhook/rules/services/validation"
 	"github.com/projectcapsule/capsule/internal/webhook/service"
 	"github.com/projectcapsule/capsule/internal/webhook/serviceaccounts"
@@ -651,6 +653,7 @@ func main() {
 	// Initialize Caches
 	impersonationCache := cache.NewImpersonationCache()
 	regexCache := cache.NewRegexCache()
+	labelSelectorCache := cache.NewLabelSelectorCache()
 	registryCache := cache.NewRegistryRuleSetCache(regexCache)
 	jsonPathCache := cache.NewJSONPathCache()
 
@@ -707,23 +710,27 @@ func main() {
 	// webhooks: the order matters, don't change it and just append
 	webhooksList := append(
 		make([]handlers.Webhook, 0),
-		rulesgenericmutation.Register(cfg),
+		rulesgenericmutation.Register(cfg, celCache),
 		rulesgenericvalidation.Register(
 			regexCache,
+			labelSelectorCache,
 			cfg,
+			celCache,
+			podrules.TemplateRules(regexCache, registryCache, celCache),
 			rulesgenericvalidation.ForKind(
 				corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(),
 				pod.Handler(cfg,
-					podrules.PodRules(regexCache, registryCache),
+					podrules.PodRules(regexCache, registryCache, celCache),
 				),
 				"ephemeralcontainers",
 			),
 			rulesgenericvalidation.ForKind(
 				corev1.SchemeGroupVersion.WithKind("Service").GroupKind(),
 				service.Handler(cfg,
-					servicerules.ServiceRules(regexCache),
+					servicerules.ServiceRules(regexCache, celCache),
 				),
 			),
+			networkpolicyrules.Handler(cfg, celCache),
 		),
 		route.GenericReplicasHandler(),
 		route.GenericManagedHandler(cfg),
@@ -738,7 +745,7 @@ func main() {
 		route.Ingress(ingress.Class(cfg, kubeVersion), ingress.Hostnames(cfg), ingress.Collision(cfg), ingress.Wildcard()),
 		route.PVCValidating(
 			pvc.Handler(
-				pvc.PersistentVolumeValidatingVolume(),
+				pvc.PersistentVolumeValidatingVolume(pvcrules.VolumeRules(cfg, labelSelectorCache, celCache)),
 				pvc.PersistentVolumeValidatingClass(),
 			),
 		),
@@ -765,7 +772,7 @@ func main() {
 		route.GenericCustomResources(generic.ResourceCounterHandler(manager.GetClient())),
 		route.Gateway(gateway.Class(cfg)),
 		route.DeviceClass(dra.DeviceClass()),
-		route.Defaults(defaults.Handler(cfg, kubeVersion)),
+		route.Defaults(defaults.Handler(cfg, kubeVersion, celCache)),
 		route.TenantMutation(
 			tenantmutation.MetaHandler(),
 		),
@@ -777,7 +784,11 @@ func main() {
 				tenantvalidation.IngressClassRegexHandler(),
 				tenantvalidation.StorageClassRegexHandler(),
 				tenantvalidation.ContainerRegistryRegexHandler(),
-				tenantvalidation.RuleHandler(manager.GetRESTMapper()),
+				tenantvalidation.PriorityClassRegexHandler(),
+				tenantvalidation.RuntimeClassRegexHandler(),
+				tenantvalidation.GatewayClassRegexHandler(),
+				tenantvalidation.DeviceClassRegexHandler(),
+				tenantvalidation.RuleHandler(manager.GetRESTMapper(), celCache),
 				tenantvalidation.HostnameRegexHandler(),
 				tenantvalidation.FreezedEmitter(),
 				tenantvalidation.OwnersHandler(),
@@ -797,7 +808,7 @@ func main() {
 				namespacevalidation.CordoningHandler(cfg),
 				namespacevalidation.QuotaHandler(),
 				namespacevalidation.PrefixHandler(cfg),
-				namespacevalidation.RulesMetadataHandler(regexCache, cfg),
+				namespacevalidation.RulesMetadataHandler(regexCache, cfg, celCache),
 				namespacevalidation.UserMetadataHandler(),
 				namespacevalidation.RequiredMetadataHandler(),
 			),
@@ -808,7 +819,7 @@ func main() {
 				namespacemutation.OwnerReferenceHandler(cfg),
 				namespacemutation.MetadataHandler(cfg),
 				// Tenant metadata must be resolved before applying namespace rules.
-				namespacemutation.RulesMetadataHandler(cfg),
+				namespacemutation.RulesMetadataHandler(cfg, celCache),
 			),
 		),
 		route.ResourcePoolMutation(resourcepool.PoolMutationHandler(ctrl.Log.WithName("webhooks").WithName("resourcepool"))),
@@ -845,7 +856,7 @@ func main() {
 				cfgvalidation.WarningHandler(),
 			),
 		),
-		route.RulesValidating(manager.GetRESTMapper(), cfg),
+		route.RulesValidating(manager.GetRESTMapper(), cfg, celCache),
 		route.ResourcePermitMutation(resourcepermit.ResourcePermitMutationHandler(
 			ctrl.Log.WithName("webhooks").WithName("resourcepermits"),
 		)),
@@ -1002,6 +1013,7 @@ func main() {
 		cfg,
 		controllerConfig,
 		impersonationCache,
+		celCache,
 	); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "tenantresources")
 		os.Exit(1)

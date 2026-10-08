@@ -72,6 +72,15 @@ func collectRegexExpressionsFromNamespaceRule(
 		return
 	}
 
+	// This visitor only collects immutable expressions and never returns an error.
+	_ = rule.Enforce.Workloads.VisitPlacementExpressions(func(_ string, match *runtime.ExpressionMatch) error {
+		if match != nil && match.Expression != "" {
+			set[cache.HashRegex(match.ExpressionRegex)] = match.ExpressionRegex
+		}
+
+		return nil
+	})
+
 	for _, registry := range rule.Enforce.Workloads.Registries {
 		expr := registry.ExpressionRegex
 		if expr.Expression == "" {
@@ -81,13 +90,26 @@ func collectRegexExpressionsFromNamespaceRule(
 		set[cache.HashRegex(expr)] = expr
 	}
 
-	for _, scheduler := range rule.Enforce.Workloads.Schedulers {
-		expr := scheduler.ExpressionRegex
-		if expr.Expression == "" {
-			continue
-		}
+	//nolint:staticcheck // Keep deprecated scheduler expressions warm after cache rebuilds.
+	for _, schedulers := range [][]runtime.ExpressionMatch{rule.Enforce.Workloads.Placement.Schedulers, rule.Enforce.Workloads.Schedulers} {
+		for _, scheduler := range schedulers {
+			expr := scheduler.ExpressionRegex
+			if expr.Expression == "" {
+				continue
+			}
 
-		set[cache.HashRegex(expr)] = expr
+			set[cache.HashRegex(expr)] = expr
+		}
+	}
+
+	for _, profiles := range [][]rules.WorkloadSecurityProfileMatch{rule.Enforce.Workloads.Security.SeccompProfiles, rule.Enforce.Workloads.Security.AppArmorProfiles} {
+		for _, profile := range profiles {
+			for _, match := range profile.LocalhostProfiles {
+				if match.Expression != "" {
+					set[cache.HashRegex(match.ExpressionRegex)] = match.ExpressionRegex
+				}
+			}
+		}
 	}
 
 	for _, metadataRule := range rule.Enforce.Metadata {

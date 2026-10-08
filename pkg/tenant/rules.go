@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -20,6 +21,29 @@ import (
 	"github.com/projectcapsule/capsule/pkg/runtime/selectors"
 	"github.com/projectcapsule/capsule/pkg/template"
 )
+
+// GetNamespaceRuleBodies reads effective namespace rules, using the same
+// namespace rendering fallback as admission wrappers when RuleStatus is absent.
+// The reader controls freshness; callers making admission decisions use the
+// API reader (or its request-local caching wrapper).
+func GetNamespaceRuleBodies(ctx context.Context, reader client.Reader, scheme *runtime.Scheme, namespace string, tnt *capsulev1beta2.Tenant) ([]*rules.NamespaceRuleBodyNamespace, error) {
+	ns := &corev1.Namespace{Name: namespace}
+
+	status, err := GetManagedRuleStatus(ctx, reader, ns)
+	if err == nil {
+		return status.Status.Rules, nil
+	}
+
+	if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+
+	if err := reader.Get(ctx, types.NamespacedName{Name: namespace}, ns); err != nil {
+		return nil, err
+	}
+
+	return BuildNamespaceRuleBodyStatus(scheme, ns, tnt)
+}
 
 func GetManagedRuleStatus(
 	ctx context.Context,
@@ -73,7 +97,7 @@ func BuildNamespaceRuleBodyStatus(
 		}
 
 		body := rule.NamespaceRuleBodyNamespace
-		if body == nil || body.Enforce == nil {
+		if body == nil || (body.Enforce == nil && len(body.Mutate) == 0) {
 			continue
 		}
 
@@ -110,7 +134,7 @@ func BuildNamespaceRuleBodyStatus(
 	out := make([]*rules.NamespaceRuleBodyNamespace, 0, len(rendered))
 
 	for _, body := range rendered {
-		if body == nil || body.Enforce == nil {
+		if body == nil || (body.Enforce == nil && len(body.Mutate) == 0) {
 			continue
 		}
 
