@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/projectcapsule/capsule/internal/cache"
+	"github.com/projectcapsule/capsule/pkg/ruleengine"
 	"github.com/projectcapsule/capsule/pkg/runtime/configuration"
 	"github.com/projectcapsule/capsule/pkg/runtime/events"
 	"github.com/projectcapsule/capsule/pkg/runtime/handlers"
@@ -22,29 +23,53 @@ import (
 const Path = "/rules/generic/validating"
 
 type genericValidating struct {
+	selectorCache *cache.LabelSelectorCache
 	regexCache    *cache.RegexCache
 	configuration configuration.Configuration
 	resourceRules []handlers.Handler
+	compiler      ruleengine.ConditionCompiler
+	templates     handlers.TypedHandlerWithTenantWithRuleset[*unstructured.Unstructured]
 }
 
 func Register(
 	regexCache *cache.RegexCache,
+	selectorCache *cache.LabelSelectorCache,
 	cfg configuration.Configuration,
+	compiler ruleengine.ConditionCompiler,
+	templates handlers.TypedHandlerWithTenantWithRuleset[*unstructured.Unstructured],
 	resourceRules ...handlers.Handler,
 ) handlers.Webhook {
+	if selectorCache == nil {
+		selectorCache = cache.NewLabelSelectorCache()
+	}
+
 	return &genericValidating{
+		selectorCache: selectorCache,
 		regexCache:    regexCache,
 		configuration: cfg,
 		resourceRules: resourceRules,
+		compiler:      compiler,
+		templates:     templates,
 	}
 }
 
 func (w *genericValidating) GetHandlers() []handlers.Handler {
+	checks := []handlers.TypedHandlerWithTenantWithRuleset[genericObject]{
+		GenericRules(w.regexCache, w.compiler),
+		&disruptionBudgetRules{selectors: w.selectorCache, compiler: w.compiler},
+	}
+
+	if w.templates != nil {
+		checks = append(checks, &templateBridge{next: w.templates})
+	}
+
 	out := make([]handlers.Handler, 0, len(w.resourceRules)+2)
 	out = append(out, matchingRequest(
-		matchesGenericMetadataRequest,
+		func(req admission.Request) bool {
+			return matchesGenericMetadataRequest(req) || matchesBudgetPodStatus(req) || matchesBudgetScale(req)
+		},
 		genericHandler(w.configuration,
-			GenericRules(w.regexCache),
+			checks...,
 		),
 	))
 	out = append(out, w.resourceRules...)
@@ -55,7 +80,7 @@ func (w *genericValidating) GetHandlers() []handlers.Handler {
 			return supported && req.SubResource == ""
 		},
 		ingressHandler(w.configuration,
-			IngressRules(w.regexCache),
+			IngressRules(w.regexCache, w.compiler),
 		),
 	))
 
